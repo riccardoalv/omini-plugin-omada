@@ -1,0 +1,4 @@
+{"errorCode": 0, "msg": "Success.", "result": [
+  {"vlan": 1, "lanName": "LAN", "ip": "192.168.0.1", "rx": 1000, "tx": 2000, "clientNum": 12},
+  {"vlan": 20, "lanName": "IOT", "ip": "192.168.20.1", "rx": 300, "tx": 400, "clientNum": 4}
+]}

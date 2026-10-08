@@ -1,0 +1,9 @@
+{"errorCode": 0, "msg": "Success.", "result": {"name": "Core switch", "status": 14, "statusCategory": 1, "portNum": 4,
+  "ports": [
+    {"port": 1, "name": "Port1", "type": 1, "operation": "SWITCHING", "portStatus": {"linkStatus": 1, "linkSpeed": 3, "poe": false, "tx": 1111, "rx": 2222, "total": 3333, "stpDiscarding": false}, "maxSpeed": 3, "disable": false},
+    {"port": 5, "name": "AP Living room", "type": 1, "operation": "SWITCHING", "portStatus": {"linkStatus": 1, "linkSpeed": 4, "poe": true, "tx": 50000, "rx": 60000, "total": 110000}, "downlink": {"mac": "50-C7-BF-00-00-03", "type": "ap", "name": "AP Living room", "statusCategory": 1, "model": "EAP660 HD"}, "maxSpeed": 4, "disable": false},
+    {"port": 6, "name": "Port6", "type": 1, "operation": "SWITCHING", "portStatus": {"linkStatus": 0, "linkSpeed": 0, "tx": 0, "rx": 0}, "disable": false},
+    {"port": 25, "name": "Port25", "type": 3, "operation": "SWITCHING", "portStatus": {"linkStatus": 1, "linkSpeed": 5, "tx": 9876543210, "rx": 1234567890}, "maxSpeed": 5, "disable": false}
+  ],
+  "uplink": {"port": 25, "mac": "50-C7-BF-00-00-01", "name": "ER605", "type": "gateway", "statusCategory": 1, "model": "ER605"},
+  "supportPoe": true, "speeds": [0, 1, 2, 3, 4, 5], "supportStack": false, "supportSTP": true}}

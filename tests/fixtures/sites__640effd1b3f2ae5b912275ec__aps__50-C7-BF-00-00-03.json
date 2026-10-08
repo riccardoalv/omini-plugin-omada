@@ -1,0 +1,1 @@
+{"errorCode": 0, "msg": "Success.", "result": {"type": "ap", "mac": "50-C7-BF-00-00-03", "name": "AP Living room", "ip": "192.168.0.20", "wirelessLinked": false, "model": "EAP660 HD(EU) v1.0", "firmwareVersion": "1.2.3 Build 20240110 Rel. 51111", "cpuUtil": 7, "memoryUtil": 61, "uptimeLong": 274329, "status": 14, "statusCategory": 1}}

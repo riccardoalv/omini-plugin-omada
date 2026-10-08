@@ -1,0 +1,3 @@
+{"errorCode": 0, "msg": "Success.", "result": {"totalRows": 1, "currentPage": 1, "currentSize": 1000, "data": [
+  {"name": "AP Living room", "mac": "50-C7-BF-00-00-03", "type": "ap", "model": "EAP660 HD(EU) v1.0", "modelVersion": "1.0", "status": 14, "latestVersion": "1.3.0 Build 20240520 Rel. 70001", "omadacId": "de382a0e78f4deb681f3128c3e75dbd1", "siteId": "640effd1b3f2ae5b912275ec", "statusCategory": 1, "version": "1.2.3 Build 20240110 Rel. 51111", "wirelessLinked": false, "fwDownload": false, "needUpgrade": true}
+]}}

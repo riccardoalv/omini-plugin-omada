@@ -1,0 +1,3 @@
+{"errorCode": 0, "msg": "Success.", "result": {"totalRows": 1, "currentPage": 1, "currentSize": 1000, "data": [
+  {"portId": 1, "standardPort": "1/0/1", "deviceId": "00-11-32-AA-BB-CC", "systemName": "nas", "neighborPortId": "eth0", "ttl": 120, "capabilities": "Station"}
+]}}

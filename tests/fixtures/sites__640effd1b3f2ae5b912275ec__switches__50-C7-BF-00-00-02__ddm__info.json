@@ -1,0 +1,3 @@
+{"errorCode": 0, "msg": "Success.", "result": [
+  {"port": 25, "standardPort": "1/0/25", "rxPower": 0.4, "rxPowerDbm": -3.98, "biasCurrent": 6.5, "dataReady": 1, "voltage": 3.3, "transmitFault": 0, "txPower": 0.5, "txPowerDbm": -3.01, "lossOfSignal": 0, "temperature": 38.5, "temperatureFah": 101.3}
+]}

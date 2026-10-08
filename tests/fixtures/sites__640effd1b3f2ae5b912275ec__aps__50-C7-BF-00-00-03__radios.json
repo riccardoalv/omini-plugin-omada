@@ -1,0 +1,5 @@
+{"errorCode": 0, "msg": "Success.", "result": {
+  "radioTraffic2g": {"rxPkts": 10, "txPkts": 20, "rx": 1000, "tx": 2000, "rxDropPkts": 0, "txDropPkts": 0, "rxErrPkts": 0, "txErrPkts": 0},
+  "radioTraffic5g": {"rxPkts": 30, "txPkts": 40, "rx": 3000, "tx": 4000, "rxDropPkts": 0, "txDropPkts": 0, "rxErrPkts": 0, "txErrPkts": 0},
+  "wp2g": {"actualChannel": "6", "maxTxRate": 574, "txPower": 20, "bandWidth": "20MHz", "rdMode": "802.11b/g/n/ax"},
+  "wp5g": {"actualChannel": "36", "maxTxRate": 2402, "txPower": 23, "bandWidth": "80MHz", "rdMode": "802.11a/n/ac/ax"}}}

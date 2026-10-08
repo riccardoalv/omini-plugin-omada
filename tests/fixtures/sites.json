@@ -1,0 +1,4 @@
+{"errorCode": 0, "msg": "Success.", "result": {"totalRows": 2, "currentPage": 1, "currentSize": 1000, "data": [
+  {"siteId": "640effd1b3f2ae5b912275ec", "name": "Default", "region": "Brazil", "timeZone": "America/Sao_Paulo", "scenario": "Home", "type": 0, "primary": true},
+  {"siteId": "650aa0d1b3f2ae5b91227600", "name": "Office", "region": "Brazil", "timeZone": "America/Sao_Paulo", "scenario": "Office", "type": 0, "primary": false}
+]}}

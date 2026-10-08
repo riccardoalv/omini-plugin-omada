@@ -1,0 +1,3 @@
+{"errorCode": 0, "msg": "Success.", "result": [
+  {"id": "p1", "port": 1, "portType": 0, "lanPort": "ETH1", "name": null, "linkStatus": 1, "linkSpeed": 4, "duplex": 2, "uplinkPort": true, "logicUplinkPort": true, "portStatus": {"tx": 444444, "rx": 333333}}
+]}

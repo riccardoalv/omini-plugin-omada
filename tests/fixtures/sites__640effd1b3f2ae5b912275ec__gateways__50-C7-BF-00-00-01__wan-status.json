@@ -1,0 +1,5 @@
+{"errorCode": 0, "msg": "Success.", "result": [
+  {"port": 1, "name": "WAN1", "mac": "50-C7-BF-00-00-11", "portDesc": "Fiber ISP", "type": 0, "mode": 0, "status": 1, "internetState": 1, "ip": "203.0.113.10", "speed": 3, "duplex": 2, "rx": 98765432100, "rxPkt": 123456, "rxPktRate": 10, "rxRate": 120, "tx": 1234567890, "txPkt": 65432, "txPktRate": 5, "txRate": 30, "proto": "dhcp", "wanPortIpv4Config": {"ip": "203.0.113.10", "netmask": "255.255.255.0", "gateway": "203.0.113.1", "priDns": "1.1.1.1", "sndDns": "8.8.8.8", "mac": "50-C7-BF-00-00-11"}, "latency": 4, "loss": 0.0, "rxErrorPkts": 0, "txErrorPkts": 0},
+  {"port": 3, "name": "WAN/LAN3", "mac": "50-C7-BF-00-00-13", "type": 1, "mode": 0, "status": 0, "internetState": 0, "speed": 0, "duplex": 0, "rx": 0, "tx": 0, "proto": "pppoe", "wanPortIpv4Config": {}},
+  {"port": 2, "name": "LAN2", "mac": "50-C7-BF-00-00-12", "type": 2, "mode": 1, "status": 1, "speed": 3, "duplex": 2, "rx": 5555555, "tx": 7777777}
+]}

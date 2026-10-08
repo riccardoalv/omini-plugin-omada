@@ -1,0 +1,42 @@
+id: omada
+name: TP-Link Omada
+version: 0.1.0
+protocol: 1
+entrypoint: main.py
+timeout_s: 120
+description: >-
+  TP-Link Omada Software Controller and OC200/OC300 through the official Omada
+  Open API: every gateway, switch and access point of a site with ports, link
+  speed, traffic counters, SFP diagnostics, LLDP and uplinks, WANs, Wi-Fi and
+  wired clients, CPU, memory, uptime and pending firmware updates. Read-only.
+author: Omini
+homepage: https://github.com/riccardoalv/omini-plugin-omada
+fields:
+  - key: url
+    type: url
+    label: Controller address
+    required: true
+    help: >-
+      The controller's web interface (the Open API "Interface Access Address"),
+      e.g. https://192.168.1.10:8043 for the Software Controller or
+      https://192.168.1.2 for an OC200/OC300.
+  - key: client_id
+    type: string
+    label: Client ID
+    required: true
+    help: >-
+      Global view → Settings → Platform Integration → Open API → Add New App:
+      Client mode, Viewer role (see the plugin's README).
+  - key: client_secret
+    type: secret
+    label: Client secret
+    required: true
+  - key: site
+    type: string
+    label: Site
+    help: Name of the site to read; empty reads the default (or first) site.
+  - key: verify_tls
+    type: bool
+    label: Verify the TLS certificate
+    default: false
+    help: The controller uses a self-signed certificate by default; turn this on if yours is trusted.
