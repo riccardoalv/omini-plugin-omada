@@ -34,6 +34,10 @@ class Unavailable(Exception):
     forbidden to the application's role, or failing. Optional data is skipped."""
 
 
+class Forbidden(Unavailable):
+    """The application's role may not do this (error -1005/-1505 or HTTP 403)."""
+
+
 class Client:
     def __init__(
         self,
@@ -184,18 +188,27 @@ class Client:
 
     def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         """GETs ``/openapi/v1/{omadacId}/<path>`` and returns its ``result``."""
+        return self._call("GET", path, params=params)
+
+    def put(self, path: str, body: dict[str, Any]) -> Any:
+        """PUTs a configuration change (only ``apply`` calls it, for the changes
+        the manifest declares). Whether it took effect is checked by reading
+        again, never assumed from the answer."""
+        return self._call("PUT", path, json=body)
+
+    def _call(self, method: str, path: str, **kwargs: Any) -> Any:
         full = f"/openapi/v1/{self.omadac_id}/{path.lstrip('/')}"
         for attempt in range(2):
             r = self._send(
-                "GET", full, params=params, headers={"Authorization": f"AccessToken={self.token()}"}
+                method, full, headers={"Authorization": f"AccessToken={self.token()}"}, **kwargs
             )
             if r.status_code == 401 and attempt == 0:
                 self._forget_token()
                 continue
             if r.status_code == 401:
                 raise PluginError("the Omada controller rejected the access token")
-            if r.status_code in (403, 404):
-                raise Unavailable(f"{path}: HTTP {r.status_code}")
+            if r.status_code == 403:
+                raise Forbidden(f"{path}: HTTP 403")
             if r.status_code >= 400:
                 raise Unavailable(f"{path}: HTTP {r.status_code}")
             body = self._json(r)
@@ -207,6 +220,8 @@ class Client:
                 continue
             if code == 0:
                 return body.get("result")
+            if code in FORBIDDEN:
+                raise Forbidden(f"{path}: error {code} ({body.get('msg')})")
             raise Unavailable(f"{path}: error {code} ({body.get('msg')})")
         raise PluginError("the Omada controller keeps refusing new access tokens")
 

@@ -8,9 +8,12 @@ description: >-
   TP-Link Omada Software Controller and OC200/OC300 through the official Omada
   Open API: every gateway, switch and access point of a site with ports, link
   speed, traffic counters, SFP diagnostics, LLDP and uplinks, WANs, Wi-Fi and
-  wired clients, CPU, memory, uptime and pending firmware updates. Read-only.
+  wired clients, CPU, memory, uptime and pending firmware updates; enables or
+  disables switch ports (through the controller, which keeps the change).
 author: Omini
 homepage: https://github.com/riccardoalv/omini-plugin-omada
+changes:
+  - port.enabled
 fields:
   - key: url
     type: url
@@ -26,7 +29,8 @@ fields:
     required: true
     help: >-
       Global view → Settings → Platform Integration → Open API → Add New App:
-      Client mode, Viewer role (see the plugin's README).
+      Client mode, Administrator role to enable and disable switch ports
+      (Viewer only reads; see the plugin's README).
   - key: client_secret
     type: secret
     label: Client secret

@@ -1,4 +1,5 @@
 import json
+import re
 from functools import partial
 from pathlib import Path
 
@@ -31,6 +32,9 @@ class FakeOmada:
         self.calls: list[str] = []
         self.requests: list[tuple[str, str]] = []
         self.token_requests = 0
+        # Port changes: the bodies PUT to .../ports/{port}/status, by path.
+        self.puts: list[tuple[str, dict]] = []
+        self.ignore_changes = False  # answers the PUT but changes nothing
 
     def expire_tokens(self):
         self.tokens.clear()
@@ -52,7 +56,10 @@ class FakeOmada:
         rel = path.removeprefix(f"/openapi/v1/{OMADAC_ID}/")
         if any(rel.startswith(p) for p in self.forbidden):
             return httpx.Response(200, json={"errorCode": -1005, "msg": "Operation forbidden."})
-        if path not in self.routes:
+        status = re.fullmatch(r"sites/([^/]+)/switches/([^/]+)/ports/(\d+)/status", rel)
+        if status and request.method == "PUT":
+            return self.port_status(status, json.loads(request.content))
+        if path not in self.routes or request.method != "GET":
             return httpx.Response(404, json={"errorCode": -1, "msg": "Not found"})
         body = json.loads(json.dumps(self.routes[path]))
         result = body.get("result")
@@ -63,6 +70,20 @@ class FakeOmada:
             result["data"] = result["data"][(page - 1) * size : page * size]
             result["currentPage"], result["currentSize"] = page, size
         return httpx.Response(200, json=body)
+
+    def port_status(self, m: re.Match, body: dict) -> httpx.Response:
+        """Set port status for given port: {"status": 0 | 1} turns the port off or on."""
+        site, switch, port = m.groups()
+        stat = self.routes.get(f"/openapi/v1/{OMADAC_ID}/sites/{site}/stat/switches/{switch}")
+        ports = {p["port"]: p for p in (stat or {}).get("result", {}).get("ports", [])}
+        if int(port) not in ports or body.get("status") not in (0, 1):
+            return httpx.Response(
+                200, json={"errorCode": -1001, "msg": "Invalid request parameters."}
+            )
+        self.puts.append((m.string, body))
+        if not self.ignore_changes:
+            ports[int(port)]["disable"] = body["status"] == 0
+        return httpx.Response(200, json={"errorCode": 0, "msg": "Success."})
 
     def authorize(self, request: httpx.Request) -> httpx.Response:
         self.token_requests += 1
@@ -97,6 +118,7 @@ class FakeOmada:
 
 @pytest.fixture
 def omada(monkeypatch):
+    monkeypatch.setattr(collect_module, "VERIFY_PAUSE_S", 0)
     fake = FakeOmada()
     monkeypatch.setattr(
         collect_module,

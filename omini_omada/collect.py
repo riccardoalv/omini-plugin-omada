@@ -4,11 +4,13 @@ access point of the site, keyed by its MAC."""
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
 from omini_sdk import (
+    Change,
     Config,
     Device,
     FdbEntry,
@@ -25,7 +27,7 @@ from omini_sdk import (
     log,
 )
 
-from omini_omada.client import Client, Unavailable
+from omini_omada.client import Client, Forbidden, Unavailable
 
 T = TypeVar("T")
 
@@ -51,6 +53,10 @@ CONNECTORS = {1: "rj45", 3: "sfp"}
 # 3 heartbeat missed, 4 isolated. Disconnected and pending ones are left out.
 SKIPPED_STATUS = (0, 2)
 SOURCE = "omada"
+# After a change, the controller is read again this many times, this far apart,
+# until the switch's port shows it.
+VERIFY_READS = 3
+VERIFY_PAUSE_S = 1.0
 
 
 # -- small helpers --------------------------------------------------------
@@ -233,7 +239,8 @@ def build_switch(client: Client, site: str, d: dict, m: str, fields: dict) -> Bu
         up = None
         if ps.get("linkStatus") in (0, 1):
             up = ps.get("linkStatus") == 1
-        if p.get("disable") is True:
+        disabled = p.get("disable")
+        if disabled is True:
             up = False
         interfaces[pid] = Interface(
             name=name,
@@ -241,6 +248,7 @@ def build_switch(client: Client, site: str, d: dict, m: str, fields: dict) -> Bu
             type="ethernet",
             connector=CONNECTORS.get(num(p.get("type")) or 0),
             up=up,
+            enabled=not disabled if isinstance(disabled, bool) else None,
             speed_mbps=LINK_SPEED.get(num(ps.get("linkSpeed")) or 0) if up else None,
             rx_bytes=counter(ps.get("rx")),
             tx_bytes=counter(ps.get("tx")),
@@ -655,3 +663,89 @@ def test(cfg: Config) -> str:
         return f'Connected to {ctrl}, site "{site.get("name")}": {found}'
     finally:
         client.close()
+
+
+# -- changes --------------------------------------------------------------
+
+WRITE_ROLE = (
+    "the Open API application's role may not change the site's devices: give it the "
+    "Administrator role (or a custom role with Modify permission on devices) and "
+    "Site Privileges on this site in Settings → Platform Integration → Open API"
+)
+
+
+def port_number(name: str) -> int | None:
+    """The API's port number of a switch port as collect names it ("Port 5")."""
+    hit = re.fullmatch(r"Port (\d+)", name or "")
+    return int(hit.group(1)) if hit else None
+
+
+def switch_port(client: Client, site: str, m: str, pid: int) -> dict[str, Any] | None:
+    stat = client.get(f"sites/{site}/stat/switches/{api_mac(m)}")
+    ports = stat.get("ports") if isinstance(stat, dict) else None
+    return next((p for p in ports or [] if num(p.get("port")) == pid), None)
+
+
+def apply(cfg: Config, change: Change) -> list[Device]:
+    """Enables or disables a switch port (port.enabled) with the Open API's
+    "Set port status for given port" (only the port's on/off state: its
+    profile, name and other settings stay as they are), then reads the
+    switch's ports again until they show it. The controller keeps the change
+    in its own configuration and pushes it to the switch, so there is nothing
+    else to save. Returns the site as read after the change."""
+    if change.kind != "port.enabled" or not isinstance(change.value, bool):
+        raise PluginError(f"this plugin cannot apply {change.kind} = {change.value!r}")
+    client = make_client(cfg)
+    try:
+        site = pick_site(client, cfg.str("site"))
+        sid = site["siteId"]
+        row = next(
+            (d for d in site_devices(client, site) if mac(d.get("mac")) == change.device), None
+        )
+        if row is None:
+            raise PluginError(f'the device {change.device} is not in site "{site.get("name")}"')
+        kind = str(row.get("type") or "").lower()
+        if kind != "switch":
+            what = {"ap": "an access point", "gateway": "a gateway"}.get(kind, "not a switch")
+            raise PluginError(
+                f"{text(row.get('name')) or change.device} is {what}: only switch ports "
+                "can be enabled or disabled"
+            )
+        pid = port_number(change.port or "")
+        try:
+            port = switch_port(client, sid, change.device, pid) if pid is not None else None
+        except Unavailable as e:
+            raise PluginError(f"cannot read the switch's ports ({e})") from e
+        if port is None:
+            raise PluginError(f"the switch has no {change.port}")
+        if port.get("disable") is not (not change.value):
+            try:
+                client.put(
+                    f"sites/{sid}/switches/{api_mac(change.device)}/ports/{pid}/status",
+                    {"status": 1 if change.value else 0},
+                )
+            except Forbidden as e:
+                raise PluginError(WRITE_ROLE) from e
+            except Unavailable as e:
+                raise PluginError(
+                    f"the controller refused to change {change.port} ({e}): nothing was changed"
+                ) from e
+            if not applied(client, sid, change.device, pid, change.value):
+                raise PluginError(f"the controller did not apply the change to {change.port}")
+    finally:
+        client.close()
+    return collect(cfg)
+
+
+def applied(client: Client, site: str, m: str, pid: int, enabled: bool) -> bool:
+    for i in range(VERIFY_READS):
+        if i:
+            time.sleep(VERIFY_PAUSE_S)
+        try:
+            port = switch_port(client, site, m, pid)
+        except Unavailable as e:
+            log.warning("could not read the switch's ports again: %s", e)
+            continue
+        if port is not None and port.get("disable") is (not enabled):
+            return True
+    return False
