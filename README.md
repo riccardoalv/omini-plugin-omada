@@ -14,6 +14,8 @@ One Omini device per managed gateway, switch and access point (its key is its MA
 | Upgradeable devices (the controller's own list) | Pending firmware updates and the latest version |
 | Switch ports: status, link speed, RJ45/SFP, traffic counters, the switch's uplink port | Ports of the switch, link speeds, traffic |
 | Switch SFP diagnostics (DDM): temperature, voltage, bias, TX/RX power | Transceiver health |
+| Switch ports' spanning tree state (`portStatus.stpDiscarding`: discarding is blocking; otherwise forwarding while the link is up, disabled while it is down) | Standby links (a blocking port) on the map |
+| Switch ports' LAG (`lagId` in the switch statistics): each member gets `LAG <id>`, and the LAG itself is reported (type `lag`, up when a member is, its speed the sum of the members up) | The cables of a LAG drawn as one link |
 | Switch LLDP neighbors | Links between devices |
 | Uplink of each device (device list) and the Wi-Fi uplink of mesh APs | Where each device hangs on the map |
 | Gateway WANs and ports: status, speed, IP, traffic counters, internet state, latency, loss | WAN nodes, gateway status, ports |
@@ -51,6 +53,15 @@ Omada keeps VLANs per **site**: they are the site's LAN networks (*Settings → 
   - Profiles made by Omini stay in the controller when no port uses them any more; delete them there if you like.
 
 There is no global "VLAN mode" to turn on in Omada: a switch adopted by the controller always follows the site's networks and profiles. All of this goes through the controller, which keeps the change and pushes it to the switches; there is nothing to save on the switch.
+
+## Configuration backup
+
+Omini keeps a history of each device's configuration (never restored from it). The Open API has no text export, so the plugin's backup is **JSON with sorted keys**, one per device of the site that collection reports (keyed by its MAC):
+
+- **Each device:** its name, model and type (device list) and the settings in *Get switch info* / *Get gateway info* / *Get AP info*: a switch's **port list** (each port's name, profile, profile override, PoE mode, LAG, on/off), a gateway's **port settings** (`portConfigs`), and the IP, LED, radio and management VLAN settings when the controller lists them there. Status (uptime, CPU, memory, temperature, firmware, link state, counters, clients) is left out.
+- **The site's settings**, in one device's backup only, so that a change to the site is one change: the gateway's, else the switch with the lowest MAC (else the access point with the lowest MAC). They are the LAN networks (`lan-networks`), the port profiles (`lan-profiles`) and the Wi-Fi networks (the SSIDs of every WLAN group).
+
+**Secrets are left out**: the SSIDs' passwords (`pskSetting.securityKey`) and any field named like a password, passphrase, secret, security or private key, or `pwd` (RADIUS, PPPoE, VPN), at any depth. Every list is sorted (ports by number, networks, profiles and SSIDs by name), so two backups of an unchanged site are equal and differ only when the configuration changed. An endpoint the application's role or the controller's version lacks is left out the same way every time; any other error fails the backup rather than produce a partial one. The backup only reads (the GET requests above; a **Viewer** application can make it). The content is never logged.
 
 ## Requirements
 
@@ -106,6 +117,7 @@ All endpoints are from the official Open API reference, [use1-omada-northbound.t
 | AP ports | `GET .../sites/{siteId}/aps/{apMac}/ports` | Ap → *Get AP port list* |
 | AP radios | `GET .../sites/{siteId}/aps/{apMac}/radios` | Ap → *Get AP radio detail* |
 | Clients | `GET .../sites/{siteId}/clients` | Client → *Get client list* |
+| Backup: the devices' settings (backup only) | `GET .../sites/{siteId}/switches/{switchMac}`, `.../gateways/{gatewayMac}`, `.../aps/{apMac}`; the site's `lan-networks`, `lan-profiles` and `wireless-network/wlans/{wlanId}/ssids` | Switch → *Get switch info*, Gateway → *Get gateway info*, Ap → *Get AP info*, Site, Wireless network |
 | Enable / disable a switch port (only when asked in Omini) | `PUT .../sites/{siteId}/switches/{switchMac}/ports/{port}/status`, body `{"status": 0 \| 1}` | Switch → *Set port status for given port* |
 | The site's networks (VLANs) | `GET /openapi/v2/{omadacId}/sites/{siteId}/lan-networks` (paged); `GET /openapi/v1/...` on controllers without v2 | Site → *Get LAN network list* (v2, and the deprecated v1) |
 | Port profiles | `GET .../sites/{siteId}/lan-profiles` (paged) | Site → *Get LAN profile list* |
@@ -130,7 +142,9 @@ Notes:
 - **Link speed codes.** The reference documents `linkSpeed` as `1: 10M, 2: 100M, 3: 1000M, 4: 2.5G, 5: 10G, 6: 5G, 7: 25G, 8: 100G, 9: 40G` for devices, gateways and the switch speed list, but as `4: 10Gbps` in some port descriptions written before 2.5G ports existed. The plugin uses the first list; a 10G port could show as 2.5G if a firmware uses the older code.
 - **Uptime** of the device list is a string; the formats `3day(s) 4h 12m 9s`, `3 days 04:12:09` and plain seconds are understood (APs also report `uptimeLong` in seconds).
 - **Gateway ports**: `wan-status` is used for every port it lists, WAN (`mode` 0) or LAN. If a controller lists only WANs there, the gateway's LAN ports do not appear (its LAN networks still do, as VLANs).
-- **Stacked switches** (stack ports `unit/slot/port`) and switches in a LAG are read as plain ports; LAG membership is not reported.
+- **Stacked switches** (stack ports `unit/slot/port`) are read as plain ports.
+- **STP and LAGs (not verified on hardware).** Assumed: `portStatus.stpDiscarding` is `true` on a port spanning tree blocks (and `false` when spanning tree is off, so a switch without it shows its ports forwarding); the port role and the root bridge are not in the Open API, so they are not reported; a LAG member carries its LAG's number as `lagId` in *Get switch statistics*; the controller does not list a LAG as a port of its own, so the plugin builds it from its members. SFP modules' temperature alarm thresholds are not in `ddm/info`, so Omini's default applies to hot modules.
+- **Backup (not verified on hardware).** The settings fields kept from *Get switch info*, *Get gateway info* and *Get AP info* (`portList`, `portConfigs`, `ipSetting`, `ledSetting`, `radioSetting*`, `mvlanSetting`...) are taken when present; whichever of them a controller does not return is simply absent. The SSIDs' password field is assumed to be `pskSetting.securityKey`, as in the create and update bodies.
 - **Gateway temperature** is reported as a board sensor; the API does not say where it is measured.
 - Wired clients connected to a switch port behind a LAG use the first port of the LAG.
 - The Omada **Cloud-Based Controller** and MSP mode are not supported.

@@ -12,6 +12,7 @@ from typing import Any, TypeVar
 from omini_sdk import (
     Change,
     Config,
+    ConfigBackup,
     Device,
     FdbEntry,
     Firmware,
@@ -20,6 +21,7 @@ from omini_sdk import (
     Interface,
     Neighbor,
     PluginError,
+    PortStp,
     Temperature,
     Transceiver,
     Vlan,
@@ -27,6 +29,7 @@ from omini_sdk import (
     log,
 )
 
+from omini_omada import backup as bk
 from omini_omada import vlans as vl
 from omini_omada import wifi as wlan
 from omini_omada.client import Client, Forbidden, Unavailable
@@ -254,6 +257,8 @@ def build_switch(client: Client, site: str, d: dict, m: str, fields: dict) -> Bu
             speed_mbps=LINK_SPEED.get(num(ps.get("linkSpeed")) or 0) if up else None,
             rx_bytes=counter(ps.get("rx")),
             tx_bytes=counter(ps.get("tx")),
+            stp=port_stp(ps, up),
+            lag=lag_name(p),
         )
         b.ports[pid] = name
 
@@ -276,6 +281,7 @@ def build_switch(client: Client, site: str, d: dict, m: str, fields: dict) -> Bu
             )
     if interfaces:
         fields["interfaces"] = [interfaces[k] for k in sorted(interfaces)]
+        fields["interfaces"] += lags(fields["interfaces"])
 
     neighbors: list[Neighbor] = []
     for n in optional("LLDP", lambda: client.pages(f"{path}/lldp-neighbors")) or []:
@@ -302,6 +308,49 @@ def build_switch(client: Client, site: str, d: dict, m: str, fields: dict) -> Bu
     if neighbors:
         fields["neighbors"] = neighbors
     return b
+
+
+def port_stp(status: dict[str, Any], up: bool | None) -> PortStp | None:
+    """The port's spanning tree state from ``portStatus.stpDiscarding``: a
+    discarding port is blocking; otherwise forwarding while its link is up and
+    disabled while it is down. The controller gives no role."""
+    discarding = status.get("stpDiscarding")
+    if not isinstance(discarding, bool):
+        return None
+    if discarding:
+        return PortStp(state="blocking")
+    if up is None:
+        return None
+    return PortStp(state="forwarding" if up else "disabled")
+
+
+def lag_name(p: dict[str, Any]) -> str | None:
+    """ "LAG 1" for a port of the switch's LAG 1 (``lagId``), as Omada names it."""
+    lag = num(p.get("lagId"))
+    return f"LAG {lag}" if lag is not None and lag > 0 else None
+
+
+def lags(ports: list[Interface]) -> list[Interface]:
+    """The switch's LAGs (type "lag"), from their member ports: up when a
+    member is, its speed the sum of the members that are up."""
+    groups: dict[str, list[Interface]] = {}
+    for i in ports:
+        if i.lag:
+            groups.setdefault(i.lag, []).append(i)
+    out = []
+    for name in sorted(groups, key=lambda n: num(n.split()[-1]) or 0):
+        members = groups[name]
+        known = [i.up for i in members if i.up is not None]
+        speed = sum(i.speed_mbps or 0 for i in members if i.up)
+        out.append(
+            Interface(
+                name=name,
+                type="lag",
+                up=any(known) if known else None,
+                speed_mbps=speed or None,
+            )
+        )
+    return out
 
 
 def build_ap(client: Client, site: str, d: dict, m: str, fields: dict) -> Built:
@@ -674,6 +723,23 @@ def collect(cfg: Config) -> list[Device]:
                     b.fields["wifi_networks"] = nets
         order = {"gateway": 0, "switch": 1, "ap": 2}
         return [b.device() for b in sorted(built.values(), key=lambda b: order.get(b.kind, 3))]
+    finally:
+        client.close()
+
+
+def backup(cfg: Config) -> list[ConfigBackup]:
+    """Each connected device's settings as sorted JSON; the site's networks,
+    port profiles and SSIDs go with the gateway, else the switch with the
+    lowest MAC (see backup.py). Secrets are left out."""
+    client = make_client(cfg)
+    try:
+        site = pick_site(client, cfg.str("site"))
+        rows = {
+            m: d
+            for d in site_devices(client, site)
+            if (m := mac(d.get("mac"))) and num(d.get("status")) not in SKIPPED_STATUS
+        }
+        return bk.backups(client, site["siteId"], rows)
     finally:
         client.close()
 
