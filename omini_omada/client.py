@@ -25,6 +25,7 @@ INVALID_CLIENT = -44106
 TOKEN_EXPIRED = -44112
 TOKEN_INVALID = -44113
 FORBIDDEN = (-1005, -1505)
+UNSUPPORTED_PATH = -1600
 
 PAGE_SIZE = 1000  # the largest page the API accepts
 
@@ -36,6 +37,11 @@ class Unavailable(Exception):
 
 class Forbidden(Unavailable):
     """The application's role may not do this (error -1005/-1505 or HTTP 403)."""
+
+
+class NotFound(Unavailable):
+    """The path does not exist on this controller version (HTTP 404 or error
+    -1600): an older or newer version of the endpoint may."""
 
 
 class Client:
@@ -186,9 +192,10 @@ class Client:
 
     # -- API --------------------------------------------------------------
 
-    def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
-        """GETs ``/openapi/v1/{omadacId}/<path>`` and returns its ``result``."""
-        return self._call("GET", path, params=params)
+    def get(self, path: str, params: dict[str, Any] | None = None, api: str = "v1") -> Any:
+        """GETs ``/openapi/{api}/{omadacId}/<path>`` and returns its ``result``
+        (``api`` is v1, or v2 for the endpoints that have a newer version)."""
+        return self._call("GET", path, params=params, api=api)
 
     def put(self, path: str, body: dict[str, Any]) -> Any:
         """PUTs a configuration change (only ``apply`` calls it, for the changes
@@ -196,20 +203,20 @@ class Client:
         again, never assumed from the answer."""
         return self._call("PUT", path, json=body)
 
-    def post(self, path: str, body: dict[str, Any]) -> Any:
+    def post(self, path: str, body: dict[str, Any], api: str = "v1") -> Any:
         """POSTs something new (a change, as put)."""
-        return self._call("POST", path, json=body)
+        return self._call("POST", path, json=body, api=api)
 
-    def patch(self, path: str, body: dict[str, Any]) -> Any:
+    def patch(self, path: str, body: dict[str, Any], api: str = "v1") -> Any:
         """PATCHes a configuration change (as put)."""
-        return self._call("PATCH", path, json=body)
+        return self._call("PATCH", path, json=body, api=api)
 
     def delete(self, path: str) -> Any:
         """DELETEs something (a change, as put)."""
         return self._call("DELETE", path)
 
-    def _call(self, method: str, path: str, **kwargs: Any) -> Any:
-        full = f"/openapi/v1/{self.omadac_id}/{path.lstrip('/')}"
+    def _call(self, method: str, path: str, api: str = "v1", **kwargs: Any) -> Any:
+        full = f"/openapi/{api}/{self.omadac_id}/{path.lstrip('/')}"
         for attempt in range(2):
             r = self._send(
                 method, full, headers={"Authorization": f"AccessToken={self.token()}"}, **kwargs
@@ -221,6 +228,8 @@ class Client:
                 raise PluginError("the Omada controller rejected the access token")
             if r.status_code == 403:
                 raise Forbidden(f"{path}: HTTP 403")
+            if r.status_code == 404:
+                raise NotFound(f"{path}: HTTP 404")
             if r.status_code >= 400:
                 raise Unavailable(f"{path}: HTTP {r.status_code}")
             body = self._json(r)
@@ -234,15 +243,19 @@ class Client:
                 return body.get("result")
             if code in FORBIDDEN:
                 raise Forbidden(f"{path}: error {code} ({body.get('msg')})")
+            if code == UNSUPPORTED_PATH:
+                raise NotFound(f"{path}: error {code} ({body.get('msg')})")
             raise Unavailable(f"{path}: error {code} ({body.get('msg')})")
         raise PluginError("the Omada controller keeps refusing new access tokens")
 
-    def pages(self, path: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    def pages(
+        self, path: str, params: dict[str, Any] | None = None, api: str = "v1"
+    ) -> list[dict[str, Any]]:
         """Every row of a paged list (``result.data`` with ``totalRows``)."""
         rows: list[dict[str, Any]] = []
         page = 1
         while True:
-            result = self.get(path, {**(params or {}), "page": page, "pageSize": PAGE_SIZE})
+            result = self.get(path, {**(params or {}), "page": page, "pageSize": PAGE_SIZE}, api)
             data = (result or {}).get("data") if isinstance(result, dict) else None
             if not isinstance(data, list):
                 return rows

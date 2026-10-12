@@ -1,6 +1,6 @@
 id: omada
 name: TP-Link Omada
-version: 0.2.0
+version: 0.3.0
 protocol: 1
 entrypoint: main.py
 timeout_s: 120
@@ -8,13 +8,17 @@ description: >-
   TP-Link Omada Software Controller and OC200/OC300 through the official Omada
   Open API: every gateway, switch and access point of a site with ports, link
   speed, traffic counters, SFP diagnostics, LLDP and uplinks, WANs, Wi-Fi and
-  wired clients, CPU, memory, uptime and pending firmware updates; enables or
-  disables switch ports and manages each VLAN's Wi-Fi networks (through the
-  controller, which keeps the change).
+  wired clients, VLANs, CPU, memory, uptime and pending firmware updates;
+  enables or disables switch ports, sets their VLANs (port profiles), creates,
+  renames and deletes the site's VLAN-only networks and manages each VLAN's
+  Wi-Fi networks (through the controller, which keeps the change).
 author: Omini
 homepage: https://github.com/riccardoalv/omini-plugin-omada
 changes:
   - port.enabled
+  - port.vlans
+  - vlan.set
+  - vlan.delete
   - wifi.set
   - wifi.delete
 fields:
@@ -32,7 +36,7 @@ fields:
     required: true
     help: >-
       Global view → Settings → Platform Integration → Open API → Add New App:
-      Client mode, Administrator role to enable and disable switch ports
+      Client mode, Administrator role to change ports, VLANs and Wi-Fi
       (Viewer only reads; see the plugin's README).
   - key: client_secret
     type: secret

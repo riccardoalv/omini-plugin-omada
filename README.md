@@ -1,6 +1,6 @@
 # omini-plugin-omada
 
-[Omini](https://github.com/riccardoalv/omini) plugin for **TP-Link Omada**, through the controller's official **Omada Open API**. It reads every gateway, switch and access point of a site, and enables or disables switch ports when you ask for it in Omini. It changes nothing else: it never starts a scan, a firmware check or an upgrade.
+[Omini](https://github.com/riccardoalv/omini) plugin for **TP-Link Omada**, through the controller's official **Omada Open API**. It reads every gateway, switch and access point of a site and, when you ask for it in Omini, enables or disables switch ports, sets their VLANs, creates, renames and deletes the site's VLANs and manages each VLAN's Wi-Fi. It changes nothing else: it never starts a scan, a firmware check or an upgrade.
 
 > **Experimental.** This plugin was built from TP-Link's Open API documentation and tested against recorded answers shaped like the documented ones (`tests/fixtures`), **not on real hardware**. Reports from Omada users are welcome.
 
@@ -18,6 +18,7 @@ One Omini device per managed gateway, switch and access point (its key is its MA
 | Uplink of each device (device list) and the Wi-Fi uplink of mesh APs | Where each device hangs on the map |
 | Gateway WANs and ports: status, speed, IP, traffic counters, internet state, latency, loss | WAN nodes, gateway status, ports |
 | Gateway LAN networks (VLAN id and name), temperature | VLANs and gateway health |
+| The site's LAN networks (VLAN id and name), the port profiles and each switch port's profile | The VLANs of every switch and of each switch port (native and tagged) |
 | AP Ethernet ports and per-radio traffic counters (2.4 / 5 / 6 GHz) | Ports and traffic of the AP |
 | Online clients: Wi-Fi ones with SSID, band, signal (dBm), link rates and current traffic; wired ones with switch / gateway / AP port and VLAN; names, vendor, OS, IP | Clients on the map under the right AP or port, and their names |
 
@@ -38,6 +39,19 @@ Collecting only reads: no other endpoint that changes configuration, starts a ch
 
 `wifi.set` and `wifi.delete` manage the site's Wi-Fi networks through the Open API's wireless network endpoints, from the VLANs tab of Omini: the SSID's name, its VLAN (`vlanSetting`), its password and whether it is on (`.../ssids/{id}/enable`). A new SSID is WPA2/WPA3 personal on both bands, in the site's first WLAN group (WPA2-only creation is refused by the controller). The controller keeps it and pushes it to every access point; the plugin reads the site again until it has it. The password goes to the controller only. Not verified on hardware: the request bodies follow the controller's web API, which the Open API mirrors.
 
+### VLANs
+
+Omada keeps VLANs per **site**: they are the site's LAN networks (*Settings → Wired Networks → LAN*), and every switch of the site carries all of them. So each Omada switch reports the site's networks as its VLANs, and a switch port's VLANs are those of its **port profile**: the profile's native network is the port's untagged VLAN, its tagged networks the tagged ones.
+
+- **`vlan.set`** (`{id, name}`) creates a **VLAN-only** network (purpose *VLAN*, no subnet or DHCP: routing stays on your router) with that VLAN id, or renames the network that has it (the network is sent back as read, with only the name changed). Creating a network makes the controller add its own profile for it (native = that network).
+- **`vlan.delete`** (`{id}`) deletes a VLAN-only network. A gateway network (purpose *Interface*, with its own subnet and DHCP) is refused with a message: delete it in the controller if you mean to. The controller itself refuses to delete a network that is the native network of a profile in use; the message says to move those ports first.
+- **`port.vlans`** (`{untagged, tagged}`) gives the switch port a profile with exactly those VLANs (Switch → *Set profile for given port*). The plugin never modifies a profile (other ports use them): it picks an existing profile with exactly those VLANs **and** the same other settings as the port's current profile (PoE, 802.1X, port isolation, LLDP-MED, bandwidth/storm control, spanning tree, loopback detection, EEE, flow control, DHCP L2 relay), so the port keeps everything but its VLANs; if there is none, it creates one copied from the current profile with the VLANs replaced, named `Omini <native> <tagged,…>` (for example `Omini 10 20,30`; `(2)`, `(3)`… when the name is taken). Then it reads the switch again until the port shows the new profile and VLANs; if it does not, the port goes back to its previous profile and the profile made for it is deleted.
+  - Every Omada port has a native network: a trunk without an untagged VLAN is refused.
+  - Ports in a **LAG**, ports with **Profile Override** on (their own settings win over the profile) and ports whose profile has extra untagged networks or is *Disable* show no VLANs in Omini and cannot be changed from it (a change is refused with the reason).
+  - Profiles made by Omini stay in the controller when no port uses them any more; delete them there if you like.
+
+There is no global "VLAN mode" to turn on in Omada: a switch adopted by the controller always follows the site's networks and profiles. All of this goes through the controller, which keeps the change and pushes it to the switches; there is nothing to save on the switch.
+
 ## Requirements
 
 - **Omada Software Controller** or a hardware controller **OC200 / OC300**, **version 5.9 or later** (the Open API appeared in 5.9; client mode with *Site Privileges* in later 5.x releases).
@@ -46,14 +60,14 @@ Collecting only reads: no other endpoint that changes configuration, starts a ch
 
 ## Create the Open API application
 
-The plugin uses an Open API application in **client mode** (client credentials). To enable and disable switch ports from Omini it needs the **Administrator** role (or a custom role with **Modify** permission on devices); a **Viewer** application is enough for the map alone (changes then fail with a clear message).
+The plugin uses an Open API application in **client mode** (client credentials). To change things from Omini it needs the **Administrator** role, or a custom role with **Modify** permission on **devices** (*Site Device Manager*: port status and port profile) and on **site settings** (*Site Settings Manager*: LAN networks, port profiles, Wi-Fi); a **Viewer** application is enough for the map alone (changes then fail with a message that says which role to give it).
 
 1. Log in to the controller as an administrator and switch to the **Global** view.
 2. Go to **Settings → Platform Integration → Open API** and click **Add New App**.
 3. Fill in:
    - **App Name**: `Omini`
    - **Mode**: **Client**
-   - **Role**: **Administrator** (or a custom role with **Modify** permission on devices). Choose **Viewer** instead if Omini should only read: it can only view status and settings.
+   - **Role**: **Administrator** (or a custom role with **Modify** permission on devices and site settings). Choose **Viewer** instead if Omini should only read: it can only view status and settings.
    - **Site Privileges**: only the site(s) Omini should map.
 4. Click **Apply**. The app appears in the list: reveal and copy its **Client ID** and **Client Secret** (eye icon), and check the **Interface Access Address** (view icon) — it is the address to give Omini.
 5. In Omini: **Integrations → Add → TP-Link Omada**, fill in the fields below and click **Test connection**.
@@ -93,12 +107,20 @@ All endpoints are from the official Open API reference, [use1-omada-northbound.t
 | AP radios | `GET .../sites/{siteId}/aps/{apMac}/radios` | Ap → *Get AP radio detail* |
 | Clients | `GET .../sites/{siteId}/clients` | Client → *Get client list* |
 | Enable / disable a switch port (only when asked in Omini) | `PUT .../sites/{siteId}/switches/{switchMac}/ports/{port}/status`, body `{"status": 0 \| 1}` | Switch → *Set port status for given port* |
+| The site's networks (VLANs) | `GET /openapi/v2/{omadacId}/sites/{siteId}/lan-networks` (paged); `GET /openapi/v1/...` on controllers without v2 | Site → *Get LAN network list* (v2, and the deprecated v1) |
+| Port profiles | `GET .../sites/{siteId}/lan-profiles` (paged) | Site → *Get LAN profile list* |
+| Each switch port's profile | `GET .../sites/{siteId}/switches/{switchMac}` → `portList[]`: `port`, `profileId`, `profileOverrideEnable`, `lagPort` | Switch → *Get switch info* |
+| Create a VLAN (only when asked) | `POST /openapi/v2/.../sites/{siteId}/lan-networks` (v1 when v2 is missing), body `{name, purpose: 0, vlan, igmpSnoopEnable: false, mldSnoopEnable: false}` | Site → *Create LAN network* |
+| Rename a VLAN (only when asked) | `PATCH /openapi/v2/.../sites/{siteId}/lan-networks/{networkId}` (v1 when v2 is missing), body: the network as read with the new name | Site → *Modify LAN network* |
+| Delete a VLAN (only when asked) | `DELETE .../sites/{siteId}/lan-networks/{networkId}` | Site → *Delete LAN network* |
+| A profile for a port's VLANs (only when asked) | `POST .../sites/{siteId}/lan-profiles`, body: the port's current profile settings with `name`, `nativeNetworkId`, `tagNetworkIds`, `untagNetworkIds: []`; `DELETE .../lan-profiles/{profileId}` only to undo a failed change | Site → *Create new LAN profile*, *Delete an existing LAN profile* |
+| Set a port's VLANs (only when asked) | `PUT .../sites/{siteId}/switches/{switchMac}/ports/{port}/profile`, body `{"profileId": ...}` | Switch → *Set profile for given port* |
 
 Notes:
 
-- **Collecting only reads.** The one `POST` is the token request; the one write is the port status `PUT` above, sent only to apply a change asked for in Omini. No endpoint that starts a check or an upgrade is ever called.
+- **Collecting only reads.** The one `POST` it sends is the token request; the writes above (port status and profile, LAN networks, port profiles, Wi-Fi) are sent only to apply a change asked for in Omini. No endpoint that starts a check or an upgrade is ever called.
 - **Token** kept in the integration's state folder (file readable only by Omini, tied to the address and credentials by a hash; the secret itself is not stored there). When it expires (error `-44112`/`-44113`) the plugin asks for a new one with the client credentials instead of the refresh token, whose request would carry the secret in the URL.
-- **Rate limit**: the controller allows about 10 requests per second; the plugin spaces its requests (~8 per second) and waits a second on HTTP 429. A site with *N* switches and *M* APs takes about 6 + 3·N + 3·M + 3 per gateway requests.
+- **Rate limit**: the controller allows about 10 requests per second; the plugin spaces its requests (~8 per second) and waits a second on HTTP 429. A site with *N* switches and *M* APs takes about 8 + 4·N + 3·M + 3 per gateway requests.
 - **Optional data** (anything but the site list and the device list) is skipped when an endpoint is missing on the controller's version or forbidden to the app's role: the rest of the collection goes on.
 - Paged lists are read 1000 rows at a time until `totalRows`.
 - Switch ports are named `Port 1`, `Port 2`… after their port number (stable even when renamed in the controller); the name given in the controller becomes the port's description.
@@ -113,6 +135,7 @@ Notes:
 - Wired clients connected to a switch port behind a LAG use the first port of the LAG.
 - The Omada **Cloud-Based Controller** and MSP mode are not supported.
 - **Port changes** use *Set port status for given port*, which the current reference documents; older controllers that lack it answer with an error, and the change fails without touching anything. Ports in a LAG and stack ports are not handled specially.
+- **VLANs (not verified on hardware).** Built from the Open API reference (the `lan-networks`, `lan-profiles`, *Get switch info* and *Set profile for given port* operations and their documented fields), not from a real controller. Assumed: the v2 `lan-networks` list and writes exist on 5.15+ and v1 (deprecated) answers on older 5.x; `purpose` 0 is a VLAN-only network and 1 a gateway interface, `vlanType` 1 a multi-VLAN interface (left out); a VLAN-only network is created with just `name`, `purpose`, `vlan` and the IGMP/MLD snooping flags; renaming sends the network back as read (minus `id`, portal/ACL/rate-limit status and the `exist…`/`support…` flags) with the new name; *Get switch info* lists every port with its `profileId`, `profileOverrideEnable` and `lagPort`; the built-in *All* profile (`type` 0) with no tagged list carries every other network tagged; a profile's `untagNetworkIds` other than its native network make the port's VLANs unrepresentable; *Create new LAN profile* answers the new profile's `id` (else it is found by name); and the profile change shows in *Get switch info* within a few seconds. Easy Managed switches (which the controller answers through other paths) and stacked switches are not handled.
 
 ## Install
 

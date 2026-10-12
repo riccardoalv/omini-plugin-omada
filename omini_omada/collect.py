@@ -27,6 +27,7 @@ from omini_sdk import (
     log,
 )
 
+from omini_omada import vlans as vl
 from omini_omada import wifi as wlan
 from omini_omada.client import Client, Forbidden, Unavailable
 
@@ -566,6 +567,34 @@ def resolve_remote_ports(built: dict[str, Built]) -> None:
                 neighbors[i] = n.model_copy(update={"remote_port": name})
 
 
+def add_vlans(client: Client, sid: str, built: dict[str, Built]) -> None:
+    """The site's VLANs (LAN networks) on every switch, and each switch port's
+    VLANs from its profile."""
+    switches = {m: b for m, b in built.items() if b.kind == "switch"}
+    if not switches:
+        return
+    nets = optional("LAN networks", lambda: vl.networks(client, sid))
+    if not nets:
+        return
+    site_vlans = vl.site_vlans(nets)
+    profs = optional("port profiles", lambda: vl.profiles(client, sid))
+    for m, b in switches.items():
+        if site_vlans:
+            b.fields["vlans"] = site_vlans
+        if profs is None:
+            continue
+        ports = optional(
+            "switch port profiles", lambda m=m: vl.read_switch(client, sid, m, nets, profs)
+        )
+        if not ports:
+            continue
+        names = {name: ports[pid] for pid, name in b.ports.items() if pid in ports}
+        b.fields["interfaces"] = [
+            i.model_copy(update={"vlans": names[i.name]}) if i.name in names else i
+            for i in b.fields.get("interfaces") or []
+        ]
+
+
 # -- entry points ---------------------------------------------------------
 
 
@@ -633,6 +662,7 @@ def collect(cfg: Config) -> list[Device]:
             builder = BUILDERS.get(kind)
             built[m] = builder(client, sid, d, m, fields) if builder else Built(kind, fields)
 
+        add_vlans(client, sid, built)
         clients = optional("clients", lambda: client.pages(f"sites/{sid}/clients")) or []
         add_clients(built, clients)
         resolve_remote_ports(built)
@@ -681,6 +711,14 @@ WRITE_ROLE = (
 )
 
 
+VLAN_ROLE = (
+    "the Open API application's role may not change the site's networks and port profiles: "
+    "give it the Administrator role (or a custom role with Modify permission on Site Settings "
+    "and on devices) and Site Privileges on this site in Settings → Platform Integration → "
+    "Open API"
+)
+
+
 def port_number(name: str) -> int | None:
     """The API's port number of a switch port as collect names it ("Port 5")."""
     hit = re.fullmatch(r"Port (\d+)", name or "")
@@ -702,6 +740,8 @@ def apply(cfg: Config, change: Change) -> list[Device]:
     else to save. Returns the site as read after the change."""
     if change.kind in ("wifi.set", "wifi.delete"):
         return apply_wifi(cfg, change)
+    if change.kind in ("vlan.set", "vlan.delete", "port.vlans"):
+        return apply_vlans(cfg, change)
     if change.kind != "port.enabled" or not isinstance(change.value, bool):
         raise PluginError(f"this plugin cannot apply {change.kind} = {change.value!r}")
     client = make_client(cfg)
@@ -758,6 +798,56 @@ def applied(client: Client, site: str, m: str, pid: int, enabled: bool) -> bool:
         if port is not None and port.get("disable") is (not enabled):
             return True
     return False
+
+
+def apply_vlans(cfg: Config, change: Change) -> list[Device]:
+    """vlan.set / vlan.delete: a VLAN-only LAN network of the site (created,
+    renamed or deleted); port.vlans: a switch port's VLANs, by giving it a port
+    profile with exactly those VLANs (see vlans.py). The controller keeps the
+    change and pushes it to the switches; it is read again until it shows it."""
+    value = change.value if isinstance(change.value, dict) else None
+    if value is None:
+        raise PluginError(f"this plugin cannot apply {change.kind} = {change.value!r}")
+    client = make_client(cfg)
+    try:
+        site = pick_site(client, cfg.str("site"))
+        sid = site["siteId"]
+        try:
+            if change.kind == "vlan.set":
+                vid = num(value.get("id"))
+                if vid is None:
+                    raise PluginError("vlan.set needs the VLAN's id")
+                vl.set_vlan(client, sid, vid, str(value.get("name") or ""))
+            elif change.kind == "vlan.delete":
+                vid = num(value.get("id"))
+                if vid is None:
+                    raise PluginError("vlan.delete needs the VLAN's id")
+                vl.delete_vlan(client, sid, vid)
+            else:
+                row = next(
+                    (d for d in site_devices(client, site) if mac(d.get("mac")) == change.device),
+                    None,
+                )
+                if row is None:
+                    raise PluginError(
+                        f'the device {change.device} is not in site "{site.get("name")}"'
+                    )
+                if str(row.get("type") or "").lower() != "switch":
+                    raise PluginError(
+                        f"{text(row.get('name')) or change.device} is not a switch: only switch "
+                        "ports' VLANs can be changed"
+                    )
+                pid = port_number(change.port or "")
+                if pid is None:
+                    raise PluginError(f"the switch has no {change.port}")
+                vl.set_port(client, sid, change.device, pid, value, change.port or "")
+        except Forbidden as e:
+            raise PluginError(VLAN_ROLE) from e
+        except Unavailable as e:
+            raise PluginError(f"the controller refused the VLAN change ({e})") from e
+    finally:
+        client.close()
+    return collect(cfg)
 
 
 def apply_wifi(cfg: Config, change: Change) -> list[Device]:
