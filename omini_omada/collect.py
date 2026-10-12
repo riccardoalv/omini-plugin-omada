@@ -27,6 +27,7 @@ from omini_sdk import (
     log,
 )
 
+from omini_omada import wifi as wlan
 from omini_omada.client import Client, Forbidden, Unavailable
 
 T = TypeVar("T")
@@ -635,6 +636,12 @@ def collect(cfg: Config) -> list[Device]:
         clients = optional("clients", lambda: client.pages(f"sites/{sid}/clients")) or []
         add_clients(built, clients)
         resolve_remote_ports(built)
+        if "wifi_networks" in Device.model_fields:
+            # The site's SSIDs: every access point of it broadcasts them.
+            nets = optional("Wi-Fi networks", lambda: wlan.wifi_networks(wlan.ssids(client, sid)))
+            for b in built.values():
+                if b.kind == "ap" and nets:
+                    b.fields["wifi_networks"] = nets
         order = {"gateway": 0, "switch": 1, "ap": 2}
         return [b.device() for b in sorted(built.values(), key=lambda b: order.get(b.kind, 3))]
     finally:
@@ -693,6 +700,8 @@ def apply(cfg: Config, change: Change) -> list[Device]:
     switch's ports again until they show it. The controller keeps the change
     in its own configuration and pushes it to the switch, so there is nothing
     else to save. Returns the site as read after the change."""
+    if change.kind in ("wifi.set", "wifi.delete"):
+        return apply_wifi(cfg, change)
     if change.kind != "port.enabled" or not isinstance(change.value, bool):
         raise PluginError(f"this plugin cannot apply {change.kind} = {change.value!r}")
     client = make_client(cfg)
@@ -749,3 +758,27 @@ def applied(client: Client, site: str, m: str, pid: int, enabled: bool) -> bool:
         if port is not None and port.get("disable") is (not enabled):
             return True
     return False
+
+
+def apply_wifi(cfg: Config, change: Change) -> list[Device]:
+    """wifi.set: a Wi-Fi network (SSID) of the site — its name, VLAN, password,
+    on or off; wifi.delete removes it. The controller keeps it and pushes it to
+    every access point; the site is read again until it has it as asked."""
+    value = change.value if isinstance(change.value, dict) else {}
+    client = make_client(cfg)
+    try:
+        sid = pick_site(client, cfg.str("site"))["siteId"]
+        try:
+            if change.kind == "wifi.set":
+                wlan.set_wifi(client, sid, value)
+                wlan.check(client, sid, value)
+            else:
+                wlan.delete_wifi(client, sid, str(value.get("ssid") or ""))
+                wlan.check(client, sid, None, gone=str(value.get("ssid") or ""))
+        except Forbidden as e:
+            raise PluginError(WRITE_ROLE) from e
+        except Unavailable as e:
+            raise PluginError(f"the controller refused the Wi-Fi change ({e})") from e
+    finally:
+        client.close()
+    return collect(cfg)

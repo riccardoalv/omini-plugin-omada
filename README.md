@@ -34,6 +34,10 @@ The change needs an application whose role may modify the site's devices (see be
 
 Collecting only reads: no other endpoint that changes configuration, starts a check or an upgrade is ever called.
 
+### Wi-Fi per VLAN
+
+`wifi.set` and `wifi.delete` manage the site's Wi-Fi networks through the Open API's wireless network endpoints, from the VLANs tab of Omini: the SSID's name, its VLAN (`vlanSetting`), its password and whether it is on (`.../ssids/{id}/enable`). A new SSID is WPA2/WPA3 personal on both bands, in the site's first WLAN group (WPA2-only creation is refused by the controller). The controller keeps it and pushes it to every access point; the plugin reads the site again until it has it. The password goes to the controller only. Not verified on hardware: the request bodies follow the controller's web API, which the Open API mirrors.
+
 ## Requirements
 
 - **Omada Software Controller** or a hardware controller **OC200 / OC300**, **version 5.9 or later** (the Open API appeared in 5.9; client mode with *Site Privileges* in later 5.x releases).

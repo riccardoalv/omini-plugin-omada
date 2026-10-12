@@ -196,6 +196,18 @@ class Client:
         again, never assumed from the answer."""
         return self._call("PUT", path, json=body)
 
+    def post(self, path: str, body: dict[str, Any]) -> Any:
+        """POSTs something new (a change, as put)."""
+        return self._call("POST", path, json=body)
+
+    def patch(self, path: str, body: dict[str, Any]) -> Any:
+        """PATCHes a configuration change (as put)."""
+        return self._call("PATCH", path, json=body)
+
+    def delete(self, path: str) -> Any:
+        """DELETEs something (a change, as put)."""
+        return self._call("DELETE", path)
+
     def _call(self, method: str, path: str, **kwargs: Any) -> Any:
         full = f"/openapi/v1/{self.omadac_id}/{path.lstrip('/')}"
         for attempt in range(2):

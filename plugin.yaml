@@ -1,6 +1,6 @@
 id: omada
 name: TP-Link Omada
-version: 0.1.0
+version: 0.2.0
 protocol: 1
 entrypoint: main.py
 timeout_s: 120
@@ -9,11 +9,14 @@ description: >-
   Open API: every gateway, switch and access point of a site with ports, link
   speed, traffic counters, SFP diagnostics, LLDP and uplinks, WANs, Wi-Fi and
   wired clients, CPU, memory, uptime and pending firmware updates; enables or
-  disables switch ports (through the controller, which keeps the change).
+  disables switch ports and manages each VLAN's Wi-Fi networks (through the
+  controller, which keeps the change).
 author: Omini
 homepage: https://github.com/riccardoalv/omini-plugin-omada
 changes:
   - port.enabled
+  - wifi.set
+  - wifi.delete
 fields:
   - key: url
     type: url
