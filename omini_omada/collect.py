@@ -332,8 +332,8 @@ def lag_name(p: dict[str, Any]) -> str | None:
 
 
 def lags(ports: list[Interface]) -> list[Interface]:
-    """The switch's LAGs (type "lag"), from their member ports: up when a
-    member is, its speed the sum of the members that are up."""
+    """The switch's LAGs (type "lag"), from their member ports: its members,
+    up when a member is, its speed the sum of the members that are up."""
     groups: dict[str, list[Interface]] = {}
     for i in ports:
         if i.lag:
@@ -347,6 +347,7 @@ def lags(ports: list[Interface]) -> list[Interface]:
             Interface(
                 name=name,
                 type="lag",
+                members=[i.name for i in members],
                 up=any(known) if known else None,
                 speed_mbps=speed or None,
             )

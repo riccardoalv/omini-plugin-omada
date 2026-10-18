@@ -54,6 +54,7 @@ def test_lag_members_and_the_lag(omada, cfg):
     lag1, lag2 = got["LAG 1"], got["LAG 2"]
     assert lag1.type == "lag" and lag1.up is True and lag1.speed_mbps == 1000 + 10000
     assert lag2.up is False and lag2.speed_mbps is None
+    assert (lag1.members, lag2.members) == (["Port 1", "Port 25"], ["Port 6"])
     assert [i.name for i in ports(collect(cfg)).values() if i.type == "lag"] == ["LAG 1", "LAG 2"]
 
 

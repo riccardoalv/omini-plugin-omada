@@ -15,7 +15,7 @@ One Omini device per managed gateway, switch and access point (its key is its MA
 | Switch ports: status, link speed, RJ45/SFP, traffic counters, the switch's uplink port | Ports of the switch, link speeds, traffic |
 | Switch SFP diagnostics (DDM): temperature, voltage, bias, TX/RX power | Transceiver health |
 | Switch ports' spanning tree state (`portStatus.stpDiscarding`: discarding is blocking; otherwise forwarding while the link is up, disabled while it is down) | Standby links (a blocking port) on the map |
-| Switch ports' LAG (`lagId` in the switch statistics): each member gets `LAG <id>`, and the LAG itself is reported (type `lag`, up when a member is, its speed the sum of the members up) | The cables of a LAG drawn as one link |
+| Switch ports' LAG (`lagId` in the switch statistics): each member gets `LAG <id>`, and the LAG itself is reported (type `lag`, its member ports, up when a member is, its speed the sum of the members up) | The cables of a LAG drawn as one link |
 | Switch LLDP neighbors | Links between devices |
 | Uplink of each device (device list) and the Wi-Fi uplink of mesh APs | Where each device hangs on the map |
 | Gateway WANs and ports: status, speed, IP, traffic counters, internet state, latency, loss | WAN nodes, gateway status, ports |
