@@ -153,8 +153,9 @@ def test_unreadable_settings_are_left_out(omada, cfg):
     assert out[GATEWAY]["site"] == {}
 
 
-def test_a_failing_read_fails_the_backup(omada, cfg, monkeypatch):
-    """A controller error is not a missing endpoint: no half-read backup."""
+def test_a_failing_site_read_is_left_out(full, cfg, monkeypatch):
+    """The site's settings are optional parts (as in the UniFi plugin): one
+    the controller fails to answer is left out, the rest is backed up."""
     from omini_omada.client import Client, Unavailable
 
     pages = Client.pages
@@ -165,7 +166,25 @@ def test_a_failing_read_fails_the_backup(omada, cfg, monkeypatch):
         return pages(self, path, *a, **kw)
 
     monkeypatch.setattr(Client, "pages", failing)
-    with pytest.raises(PluginError, match="cannot read the site's networks"):
+    out = contents(cfg)
+    assert "networks" not in out[GATEWAY]["site"]
+    assert out[GATEWAY]["site"]["wifi_networks"] and out[GATEWAY]["site"]["port_profiles"]
+    assert out[SWITCH]["device"]["portList"]
+
+
+def test_a_failing_device_read_fails_the_backup(omada, cfg, monkeypatch):
+    """A device's own settings are not optional: no half-read backup."""
+    from omini_omada.client import Client, Unavailable
+
+    get = Client.get
+
+    def failing(self, path, *a, **kw):
+        if path.endswith("/switches/50-C7-BF-00-00-02"):
+            raise Unavailable(f"{path}: HTTP 500")
+        return get(self, path, *a, **kw)
+
+    monkeypatch.setattr(Client, "get", failing)
+    with pytest.raises(PluginError, match="cannot read the settings of"):
         backup(cfg)
 
 

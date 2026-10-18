@@ -129,7 +129,8 @@ def device_settings(c: Client, sid: str, row: dict[str, Any], m: str) -> dict[st
 
 def site_settings(c: Client, sid: str) -> dict[str, Any]:
     """The site's LAN networks, port profiles and SSIDs; a read the
-    application's role or the version cannot do is left out."""
+    application's role or the version cannot do, or the controller fails to
+    answer, is left out."""
     out: dict[str, Any] = {}
     reads = (
         ("networks", lambda: ordered(vl.networks(c, sid), "name", "id")),
@@ -147,7 +148,9 @@ def site_settings(c: Client, sid: str) -> dict[str, Any]:
         except (Forbidden, NotFound) as e:
             log.info("%s left out of the backup: %s", name, e)
         except Unavailable as e:
-            raise PluginError(f"cannot read the site's {name.replace('_', ' ')}: {e}") from e
+            # An optional part (as in the UniFi plugin): the devices' own
+            # settings are still backed up.
+            log.warning("%s left out of the backup: %s", name, e)
     return out
 
 
