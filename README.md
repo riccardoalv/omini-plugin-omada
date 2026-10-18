@@ -30,7 +30,7 @@ One Omini device per managed gateway, switch and access point (its key is its MA
 
 1. The plugin reads the switch's ports (`GET .../sites/{siteId}/stat/switches/{switchMac}`) and finds the port by its number (Omini's `Port 5` is port `5`). If the port is already in the requested state, nothing is sent.
 2. It sends `PUT /openapi/v1/{omadacId}/sites/{siteId}/switches/{switchMac}/ports/{port}/status` with `{"status": 0}` (off) or `{"status": 1}` (on): Switch → *Set port status for given port*. Only the port's on/off state travels; its profile, name, VLANs, PoE and the rest of its settings are not part of the request and stay as they are.
-3. It reads the switch's ports again (up to three times, a second apart) until the port's `disable` flag shows the change; if it does not, the change is reported as failed.
+3. It reads the switch's ports again (for about 40 seconds, every 3 seconds) until the port's `disable` flag shows the change; if it does not, it sends the previous status back and the change is reported as failed.
 4. There is nothing to save: the controller keeps the change in its own configuration and pushes it to the switch (also after the switch reboots or is re-adopted).
 
 The change needs an application whose role may modify the site's devices (see below). With a **Viewer** application the map works as before, and a change fails with a message that says which role to give the application.

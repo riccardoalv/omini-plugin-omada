@@ -59,9 +59,10 @@ CONNECTORS = {1: "rj45", 3: "sfp"}
 SKIPPED_STATUS = (0, 2)
 SOURCE = "omada"
 # After a change, the controller is read again this many times, this far apart,
-# until the switch's port shows it.
-VERIFY_READS = 3
-VERIFY_PAUSE_S = 1.0
+# until the switch's port shows it (about 40 s, as the other changes of the
+# UniFi plugin: the controller pushes the change to the switch first).
+VERIFY_READS = 14
+VERIFY_PAUSE_S = 3.0
 
 
 # -- small helpers --------------------------------------------------------
@@ -846,7 +847,20 @@ def apply(cfg: Config, change: Change) -> list[Device]:
                     f"the controller refused to change {change.port} ({e}): nothing was changed"
                 ) from e
             if not applied(client, sid, change.device, pid, change.value):
-                raise PluginError(f"the controller did not apply the change to {change.port}")
+                # Not confirmed: send the previous status back, so the port is
+                # not left changed behind an error.
+                try:
+                    client.put(
+                        f"sites/{sid}/switches/{api_mac(change.device)}/ports/{pid}/status",
+                        {"status": 0 if change.value else 1},
+                    )
+                    undo = "it was set back"
+                except (Forbidden, Unavailable) as e:
+                    log.warning("could not set %s back: %s", change.port, e)
+                    undo = "setting it back failed too"
+                raise PluginError(
+                    f"the controller did not apply the change to {change.port} ({undo})"
+                )
     finally:
         client.close()
     return collect(cfg)

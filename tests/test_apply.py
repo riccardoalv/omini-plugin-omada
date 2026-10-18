@@ -1,7 +1,9 @@
+import httpx
 import pytest
 from conftest import OMADAC_ID, SITE
 from omini_sdk import Change, PluginError
 
+import omini_omada.collect as collect_module
 from omini_omada.collect import apply, collect
 
 SWITCH = "50:c7:bf:00:00:02"
@@ -52,9 +54,21 @@ def test_enables_a_disabled_port(omada, cfg):
 
 def test_an_error_when_the_controller_did_not_take_it(omada, cfg):
     omada.ignore_changes = True
+    reads = []
+    inner = omada.handler
+
+    def handler(request):
+        if request.method == "GET" and request.url.path == STAT:
+            reads.append(1)
+        return inner(request)
+
+    collect_module.Client.keywords["transport"] = httpx.MockTransport(handler)
     with pytest.raises(PluginError, match="did not apply the change to Port 6"):
         apply(cfg, change())
-    assert len(omada.puts) == 1  # sent once, then read again; never retried blindly
+    # Sent once, read again for the whole window, never retried blindly; then
+    # the previous status is sent back so nothing is left half-changed.
+    assert omada.puts == [(STATUS.format(6), {"status": 0}), (STATUS.format(6), {"status": 1})]
+    assert len(reads) >= 1 + collect_module.VERIFY_READS
 
 
 def test_nothing_is_sent_when_the_port_is_already_so(omada, cfg):
@@ -89,3 +103,9 @@ def test_a_viewer_application_is_told_which_role_it_needs(omada, cfg):
         apply(cfg, change())
     assert "Modify" in str(e.value) and "Site Privileges" in str(e.value)
     assert stat_port(omada, 6)["disable"] is False
+
+
+def test_the_port_change_is_awaited_like_the_other_changes():
+    # The controller pushes the change to the switch: read it again for
+    # about 40 s (as the UniFi plugin does), not 3.
+    assert collect_module.VERIFY_READS * collect_module.VERIFY_PAUSE_S >= 30
