@@ -39,7 +39,7 @@ Collecting only reads: no other endpoint that changes configuration, starts a ch
 
 ### Wi-Fi per VLAN
 
-`wifi.set` and `wifi.delete` manage the site's Wi-Fi networks through the Open API's wireless network endpoints, from the VLANs tab of Omini: the SSID's name, its VLAN (`vlanSetting`), its password and whether it is on (`.../ssids/{id}/enable`). A new SSID is WPA2/WPA3 personal on both bands, in the site's first WLAN group (WPA2-only creation is refused by the controller). The controller keeps it and pushes it to every access point; the plugin reads the site again until it has it. The password goes to the controller only. Not verified on hardware: the request bodies follow the controller's web API, which the Open API mirrors.
+`wifi.set` and `wifi.delete` manage the site's Wi-Fi networks through the Open API's wireless network endpoints, from the VLANs tab of Omini: the SSID's name, its VLAN (`vlanSetting`), its password and whether it is on (`.../ssids/{id}/enable`). A new SSID is WPA2 personal (`security` 3, `versionPsk` 2) on both bands, in the site's first WLAN group. The controller keeps it and pushes it to every access point; the plugin reads the site again until it has it. The password goes to the controller only. An enterprise (802.1X) SSID shows no security in Omini. Not verified on hardware: the request bodies follow the controller's web API, which the Open API mirrors.
 
 ### VLANs
 

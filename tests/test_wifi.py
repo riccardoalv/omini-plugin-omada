@@ -143,3 +143,17 @@ def test_a_forbidden_wifi_change_names_the_site_settings_permission(site, cfg):
     value = {"ssid": "Cameras", "vlan": 40, "password": "correct horse"}
     with pytest.raises(PluginError, match="Site Settings"):
         collect_module.apply(cfg, Change(device="x", kind="wifi.set", value=value))
+
+
+def test_an_enterprise_wifi_has_no_personal_security(site, cfg):
+    # security 2 is WPA-Enterprise, which the data model has no value for:
+    # left empty rather than reported as WPA2 personal.
+    site.ssids[0]["security"] = 2
+    assert aps_wifi(collect_module.collect(cfg))["Office"].security is None
+
+
+def test_a_new_wifi_is_wpa2_personal(site, cfg):
+    value = {"ssid": "Cameras", "vlan": 40, "password": "correct horse"}
+    collect_module.apply(cfg, Change(device="x", kind="wifi.set", value=value))
+    body = site.sent[0][2]
+    assert (body["security"], body["pskSetting"]["versionPsk"]) == (3, 2)

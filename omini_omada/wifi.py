@@ -4,9 +4,8 @@ round and changed by wifi.set and wifi.delete.
 
 An SSID's VLAN is its ``vlanSetting`` (mode 1: a custom VLAN id; mode 0: the
 untagged LAN); older controllers answer ``vlanEnable`` / ``vlanId``. New SSIDs
-are WPA2/WPA3 personal (``security`` 3: WPA2-only creation is refused by the
-controller), on both bands, in the site's first WLAN group. The password goes
-to the controller only."""
+are WPA2 personal (``security`` 3, ``versionPsk`` 2), on both bands, in the
+site's first WLAN group. The password goes to the controller only."""
 
 from __future__ import annotations
 
@@ -17,7 +16,9 @@ from omini_sdk import PluginError
 
 from omini_omada.client import Client, Unavailable
 
-SECURITY = {0: "open", 2: "wpa2", 3: "wpa2"}  # 0 none, 2 WPA-Enterprise, 3 WPA-Personal
+# 0 none, 3 WPA-Personal. 2 (WPA-Enterprise) has no value in the data model:
+# it and any other code are left empty.
+SECURITY = {0: "open", 3: "wpa2"}
 
 
 def num(value: Any) -> int | None:
@@ -38,12 +39,12 @@ def vlan_of(ssid: dict[str, Any]) -> int | None:
     return None
 
 
-def security_of(ssid: dict[str, Any]) -> str:
+def security_of(ssid: dict[str, Any]) -> str | None:
     psk = ssid.get("pskSetting") if isinstance(ssid.get("pskSetting"), dict) else {}
     version = num(psk.get("versionPsk"))
     if num(ssid.get("security")) == 3 and version in (3, 4):
         return "wpa3" if version == 4 else "wpa2wpa3"
-    return SECURITY.get(num(ssid.get("security")) or 0, "wpa2")
+    return SECURITY.get(num(ssid.get("security")) or 0)
 
 
 def wlan_groups(c: Client, sid: str) -> list[dict[str, Any]]:
