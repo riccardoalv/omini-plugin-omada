@@ -157,3 +157,40 @@ def test_a_new_wifi_is_wpa2_personal(site, cfg):
     collect_module.apply(cfg, Change(device="x", kind="wifi.set", value=value))
     body = site.sent[0][2]
     assert (body["security"], body["pskSetting"]["versionPsk"]) == (3, 2)
+
+
+@pytest.fixture
+def two_groups(site):
+    """A second WLAN group with its own "Office" SSID."""
+    other = {"ssidId": "s9", "name": "Office", "band": 3, "security": 3}
+    inner = site.handler
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == f"{BASE}/wlans":
+            rows = [{"wlanId": "g1", "name": "Default"}, {"wlanId": "g2", "name": "Branch"}]
+            body = {"totalRows": 2, "currentPage": 1, "currentSize": 100, "data": rows}
+            return httpx.Response(200, json={"errorCode": 0, "msg": "", "result": body})
+        if path == f"{BASE}/wlans/g2/ssids" and request.method == "GET":
+            body = {"totalRows": 1, "currentPage": 1, "currentSize": 100, "data": [other]}
+            return httpx.Response(200, json={"errorCode": 0, "msg": "", "result": body})
+        return inner(request)
+
+    collect_module.Client.keywords["transport"] = httpx.MockTransport(handler)
+    return site
+
+
+def test_a_name_in_several_wlan_groups_is_refused(two_groups, cfg):
+    with pytest.raises(PluginError, match="several WLAN groups"):
+        collect_module.apply(cfg, Change(device="x", kind="wifi.delete", value={"ssid": "Office"}))
+    value = {"ssid": "Office", "vlan": 40}
+    with pytest.raises(PluginError, match="several WLAN groups"):
+        collect_module.apply(cfg, Change(device="x", kind="wifi.set", value=value))
+    value = {"ssid": "Main", "previous": "Office", "vlan": 40}
+    with pytest.raises(PluginError, match="several WLAN groups"):
+        collect_module.apply(cfg, Change(device="x", kind="wifi.set", value=value))
+    assert two_groups.sent == []
+    # A name in one group only is changed as before.
+    value = {"ssid": "Guests", "vlan": 40}
+    collect_module.apply(cfg, Change(device="x", kind="wifi.set", value=value))
+    assert any(p.endswith("/s2/update-basic-config") for _m, p, _b in two_groups.sent)

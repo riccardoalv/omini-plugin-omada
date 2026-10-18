@@ -98,10 +98,21 @@ def psk(password: str) -> dict[str, Any]:
     }
 
 
+def named(rows: list[tuple[str, dict[str, Any]]], name: str) -> tuple[str, dict[str, Any]] | None:
+    """The one SSID called ``name``. Omini shows one Wi-Fi network per name, so
+    a name used in several WLAN groups is refused rather than picking one."""
+    hits = [(wid, s) for wid, s in rows if name and str(s.get("name") or "") == name]
+    if len(hits) > 1:
+        raise PluginError(
+            f'the site has a Wi-Fi network "{name}" in several WLAN groups: '
+            "rename or remove the others in the controller first"
+        )
+    return hits[0] if hits else None
+
+
 def set_wifi(c: Client, sid: str, want: dict[str, Any]) -> None:
     rows = ssids(c, sid)
-    names = {str(want.get("previous") or ""), str(want["ssid"])}
-    found = next(((wid, s) for wid, s in rows if str(s.get("name") or "") in names), None)
+    found = named(rows, str(want.get("previous") or "")) or named(rows, str(want["ssid"]))
     if found is None:
         if not want.get("password"):
             raise PluginError("a new Wi-Fi network needs a password")
@@ -160,11 +171,11 @@ def enable(c: Client, sid: str, s: dict[str, Any], on: bool) -> None:
 
 
 def delete_wifi(c: Client, sid: str, ssid: str) -> None:
-    for wid, s in ssids(c, sid):
-        if s.get("name") == ssid:
-            c.delete(f"sites/{sid}/wireless-network/wlans/{wid}/ssids/{s['ssidId']}")
-            return
-    raise PluginError(f'the site has no Wi-Fi network "{ssid}"')
+    found = named(ssids(c, sid), ssid)
+    if found is None:
+        raise PluginError(f'the site has no Wi-Fi network "{ssid}"')
+    wid, s = found
+    c.delete(f"sites/{sid}/wireless-network/wlans/{wid}/ssids/{s['ssidId']}")
 
 
 def check(c: Client, sid: str, want: dict[str, Any] | None, gone: str | None = None) -> None:
