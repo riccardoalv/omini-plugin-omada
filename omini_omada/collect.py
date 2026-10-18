@@ -932,7 +932,7 @@ def apply_wifi(cfg: Config, change: Change) -> list[Device]:
                 wlan.delete_wifi(client, sid, str(value.get("ssid") or ""))
                 wlan.check(client, sid, None, gone=str(value.get("ssid") or ""))
         except Forbidden as e:
-            raise PluginError(WRITE_ROLE) from e
+            raise PluginError(VLAN_ROLE) from e
         except Unavailable as e:
             raise PluginError(f"the controller refused the Wi-Fi change ({e})") from e
     finally:

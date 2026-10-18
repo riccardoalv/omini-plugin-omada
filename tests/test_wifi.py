@@ -127,3 +127,19 @@ def test_deletes_a_wifi(site, cfg):
     assert "Guests" not in aps_wifi(devices)
     with pytest.raises(PluginError, match="no Wi-Fi network"):
         collect_module.apply(cfg, Change(device="x", kind="wifi.delete", value={"ssid": "Nope"}))
+
+
+def test_a_forbidden_wifi_change_names_the_site_settings_permission(site, cfg):
+    # SSIDs are site settings: the role needs Modify on Site Settings, not
+    # only on devices.
+    inner = site.handler
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method != "GET" and request.url.path.startswith(BASE):
+            return httpx.Response(200, json={"errorCode": -1005, "msg": "Operation forbidden."})
+        return inner(request)
+
+    collect_module.Client.keywords["transport"] = httpx.MockTransport(handler)
+    value = {"ssid": "Cameras", "vlan": 40, "password": "correct horse"}
+    with pytest.raises(PluginError, match="Site Settings"):
+        collect_module.apply(cfg, Change(device="x", kind="wifi.set", value=value))
