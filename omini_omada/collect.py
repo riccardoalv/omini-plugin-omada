@@ -30,6 +30,7 @@ from omini_sdk import (
 )
 
 from omini_omada import backup as bk
+from omini_omada import radios as rd
 from omini_omada import vlans as vl
 from omini_omada import wifi as wlan
 from omini_omada.client import Client, Forbidden, Unavailable
@@ -408,6 +409,12 @@ def build_ap(client: Client, site: str, d: dict, m: str, fields: dict) -> Built:
             )
     if interfaces:
         fields["interfaces"] = interfaces
+    if "radios" in Device.model_fields:
+        from omini_sdk.models import Radio
+
+        live = radios if isinstance(radios, dict) else {}
+        fields["radios"] = [Radio.model_validate(r) for r in rd.radios(info, live)] or None
+        fields["wireless_uplink"] = rd.wireless_uplink(info)
 
     # A mesh AP hangs from the AP it links to by Wi-Fi.
     wireless = info.get("wireless uplink info") or info.get("wirelessUplink") or {}

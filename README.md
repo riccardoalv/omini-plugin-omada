@@ -22,6 +22,8 @@ One Omini device per managed gateway, switch and access point (its key is its MA
 | Gateway LAN networks (VLAN id and name), temperature | VLANs and gateway health |
 | The site's LAN networks (VLAN id and name), the port profiles and each switch port's profile | The VLANs of every switch and of each switch port (native and tagged) |
 | AP Ethernet ports and per-radio traffic counters (2.4 / 5 / 6 GHz) | Ports and traffic of the AP |
+| AP radios (`2.4 GHz`, `5 GHz`, `5 GHz-2`, `6 GHz`): the channel it is on (`actualChannel`), width (`bandWidth`), transmit power (`txPower`) from *Get AP radio detail* (`wp2g`, `wp5g`, `wp5g2`, `wp6g`); whether it is on (`radioEnable`) and automatic (`channel` 0) from the AP's `radioSetting2g`/`5g`/`5g2`/`6g` | Wi-Fi channel conflicts |
+| Whether an AP is a mesh unit (`wirelessLinked`) | A mesh AP is never moved to another channel |
 | Online clients: Wi-Fi ones with SSID, band, signal (dBm), link rates and current traffic; wired ones with switch / gateway / AP port and VLAN; names, vendor, OS, IP | Clients on the map under the right AP or port, and their names |
 
 ## What it changes
@@ -115,7 +117,7 @@ All endpoints are from the official Open API reference, [use1-omada-northbound.t
 | LAN networks | `GET .../sites/{siteId}/gateways/{gatewayMac}/lan-status` | Gateway → *Get gateway lan status* |
 | AP | `GET .../sites/{siteId}/aps/{apMac}` (uptime, mesh uplink) | Ap → *Get AP info* |
 | AP ports | `GET .../sites/{siteId}/aps/{apMac}/ports` | Ap → *Get AP port list* |
-| AP radios | `GET .../sites/{siteId}/aps/{apMac}/radios` | Ap → *Get AP radio detail* |
+| AP radios | `GET .../sites/{siteId}/aps/{apMac}/radios` (live channel, width, power); the radios' settings from *Get AP info* (`radioSetting*`) | Ap → *Get AP radio detail* |
 | Clients | `GET .../sites/{siteId}/clients` | Client → *Get client list* |
 | Backup: the devices' settings (backup only) | `GET .../sites/{siteId}/switches/{switchMac}`, `.../gateways/{gatewayMac}`, `.../aps/{apMac}`; the site's `lan-networks`, `lan-profiles` and `wireless-network/wlans/{wlanId}/ssids` | Switch → *Get switch info*, Gateway → *Get gateway info*, Ap → *Get AP info*, Site, Wireless network |
 | Enable / disable a switch port (only when asked in Omini) | `PUT .../sites/{siteId}/switches/{switchMac}/ports/{port}/status`, body `{"status": 0 \| 1}` | Switch → *Set port status for given port* |
@@ -150,6 +152,9 @@ Notes:
 - The Omada **Cloud-Based Controller** and MSP mode are not supported.
 - **Port changes** use *Set port status for given port*, which the current reference documents; older controllers that lack it answer with an error, and the change fails without touching anything. Ports in a LAG and stack ports are not handled specially.
 - **VLANs (not verified on hardware).** Built from the Open API reference (the `lan-networks`, `lan-profiles`, *Get switch info* and *Set profile for given port* operations and their documented fields), not from a real controller. Assumed: the v2 `lan-networks` list and writes exist on 5.15+ and v1 (deprecated) answers on older 5.x; `purpose` 0 is a VLAN-only network and 1 a gateway interface, `vlanType` 1 a multi-VLAN interface (left out); a VLAN-only network is created with just `name`, `purpose`, `vlan` and the IGMP/MLD snooping flags; renaming sends the network back as read (minus `id`, portal/ACL/rate-limit status and the `exist…`/`support…` flags) with the new name; *Get switch info* lists every port with its `profileId`, `profileOverrideEnable` and `lagPort`; the built-in *All* profile (`type` 0) with no tagged list carries every other network tagged; a profile's `untagNetworkIds` other than its native network make the port's VLANs unrepresentable; *Create new LAN profile* answers the new profile's `id` (else it is found by name); and the profile change shows in *Get switch info* within a few seconds. Easy Managed switches (which the controller answers through other paths) and stacked switches are not handled.
+
+- **Radios (not verified on hardware).** Assumed: `actualChannel` is the channel number (a string), `bandWidth` reads like `20MHz` (an automatic `20/40MHz` leaves the width empty), `txPower` is in dBm, and *Get AP info* carries `radioSetting2g`/`5g`/`5g2`/`6g` with `radioEnable` and `channel` (`0` for automatic). Fields a controller does not return stay empty.
+- **Wi-Fi channel changes are not offered.** The Open API's AP radio settings endpoint could not be identified with enough confidence, so `wifi.channel` is **not declared** and Omini never asks for it. The change is written and tested (`radios.set_channel_unverified`: `PATCH .../sites/{siteId}/aps/{apMac}/radio-config` with the radio's `radioSetting*` block, only `channel` changed, read back from *Get AP info* and *Get AP radio detail*, undone if the radio does not move) and is declared once verified on a controller.
 
 ## Install
 
