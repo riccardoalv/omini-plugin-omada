@@ -30,6 +30,7 @@ from omini_sdk import (
 )
 
 from omini_omada import backup as bk
+from omini_omada import gateway as gw
 from omini_omada import radios as rd
 from omini_omada import vlans as vl
 from omini_omada import wifi as wlan
@@ -625,14 +626,13 @@ def resolve_remote_ports(built: dict[str, Built]) -> None:
                 neighbors[i] = n.model_copy(update={"remote_port": name})
 
 
-def add_vlans(client: Client, sid: str, built: dict[str, Built]) -> None:
+def add_vlans(
+    client: Client, sid: str, built: dict[str, Built], nets: list[dict[str, Any]] | None
+) -> None:
     """The site's VLANs (LAN networks) on every switch, and each switch port's
     VLANs from its profile."""
     switches = {m: b for m, b in built.items() if b.kind == "switch"}
-    if not switches:
-        return
-    nets = optional("LAN networks", lambda: vl.networks(client, sid))
-    if not nets:
+    if not switches or not nets:
         return
     site_vlans = vl.site_vlans(nets)
     profs = optional("port profiles", lambda: vl.profiles(client, sid))
@@ -651,6 +651,23 @@ def add_vlans(client: Client, sid: str, built: dict[str, Built]) -> None:
             i.model_copy(update={"vlans": names[i.name]}) if i.name in names else i
             for i in b.fields.get("interfaces") or []
         ]
+
+
+def add_gateway(
+    built: dict[str, Built], nets: list[dict[str, Any]], clients: list[dict[str, Any]]
+) -> None:
+    """The gateway's networks, the domain it hands out and its DHCP clients
+    (see gateway.py)."""
+    from omini_sdk import DhcpLease, Network
+
+    for b in built.values():
+        if b.kind != "gateway":
+            continue
+        b.fields["networks"] = [Network.model_validate(n) for n in gw.networks(nets)] or None
+        b.fields["dns_domain"] = gw.domain(nets)
+        b.fields["dhcp_leases"] = [
+            DhcpLease.model_validate(x) for x in gw.leases(clients, nets)
+        ] or None
 
 
 # -- entry points ---------------------------------------------------------
@@ -720,8 +737,12 @@ def collect(cfg: Config) -> list[Device]:
             builder = BUILDERS.get(kind)
             built[m] = builder(client, sid, d, m, fields) if builder else Built(kind, fields)
 
-        add_vlans(client, sid, built)
+        nets = None
+        if any(b.kind in ("switch", "gateway") for b in built.values()):
+            nets = optional("LAN networks", lambda: vl.networks(client, sid))
+        add_vlans(client, sid, built, nets)
         clients = optional("clients", lambda: client.pages(f"sites/{sid}/clients")) or []
+        add_gateway(built, nets or [], clients)
         add_clients(built, clients)
         resolve_remote_ports(built)
         if "wifi_networks" in Device.model_fields:

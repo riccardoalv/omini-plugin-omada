@@ -8,8 +8,9 @@ description: >-
   TP-Link Omada Software Controller and OC200/OC300 through the official Omada
   Open API: every gateway, switch and access point of a site with ports, link
   speed, traffic counters, SFP diagnostics, LLDP and uplinks, spanning tree and
-  LAGs, WANs, Wi-Fi and wired clients, VLANs, CPU, memory, uptime and pending
-  firmware updates; backs up each device's and the site's settings (no secrets);
+  LAGs, WANs, Wi-Fi and wired clients, VLANs, the access points' radios and
+  channels, the gateway's networks and DHCP clients, CPU, memory, uptime and
+  pending firmware updates; backs up each device's and the site's settings (no secrets);
   enables or disables switch ports, sets their VLANs (port profiles), creates,
   renames and deletes the site's VLAN-only networks and manages each VLAN's
   Wi-Fi networks (through the controller, which keeps the change).
