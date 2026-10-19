@@ -234,7 +234,7 @@ def test_token_is_cached_and_renewed(omada, cfg):
     assert len(collect(cfg)) == 4
     assert omada.token_requests == 2
     data = json.loads((cfg.state_dir / "token.json").read_text())
-    assert data["accessToken"] in omada.tokens
+    assert data["data"]["accessToken"] in omada.tokens
 
 
 def test_other_credentials_do_not_reuse_the_cached_token(omada, cfg):
@@ -285,10 +285,13 @@ def test_missing_fields(cfg):
         collect(cfg)
 
 
-def test_unreachable_host(cfg):
+def test_unreachable_host(cfg, monkeypatch):
+    pauses = []
+    monkeypatch.setattr("time.sleep", pauses.append)
     cfg["url"] = "https://127.0.0.1:9"
     with pytest.raises(PluginError, match="cannot connect"):
         connection_test(cfg)
+    assert pauses == [1.0, 2.0]  # a refused connection is asked again twice
 
 
 @pytest.mark.parametrize(
@@ -321,3 +324,42 @@ def test_mac_normalization(raw, normalized):
 )
 def test_uptime(raw, seconds):
     assert uptime_seconds(raw) == seconds
+
+
+def test_a_busy_controller_is_asked_again(omada, cfg, monkeypatch):
+    import httpx
+
+    import omini_omada.collect as collect_module
+
+    pauses = []
+    monkeypatch.setattr("time.sleep", pauses.append)
+    busy = {"left": 1}
+
+    def flaky(request):
+        if busy["left"] and request.url.path.endswith("/devices"):
+            busy["left"] -= 1
+            return httpx.Response(429, headers={"Retry-After": "2"})
+        return omada.handler(request)
+
+    collect_module.Client.keywords["transport"] = httpx.MockTransport(flaky)
+    assert len(collect(cfg)) == 4
+    assert pauses == [2.0]
+
+
+def test_a_token_saved_by_an_older_version_is_replaced(omada, cfg):
+    cfg.state_dir.mkdir(parents=True)
+    (cfg.state_dir / "token.json").write_text(
+        json.dumps({"key": "x", "omadacId": "y", "accessToken": "old", "expiresAt": 9e9})
+    )
+    collect(cfg)
+    assert omada.token_requests == 1
+
+
+def test_timeout_and_tls_come_from_the_advanced_fields(cfg):
+    from omini_omada.collect import make_client
+
+    cfg["timeout_s"] = 30
+    cfg["verify_tls"] = True
+    c = make_client(cfg)
+    assert c.http.timeout.read == 30
+    c.close()

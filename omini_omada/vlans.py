@@ -22,14 +22,14 @@ other ports use them."""
 
 from __future__ import annotations
 
-import contextlib
 import time
 from collections.abc import Callable
 from typing import Any, TypeVar
 
 from omini_sdk import PluginError, PortVlans, Vlan
+from omini_sdk.changes import Failed, apply_verify
 
-from omini_omada.client import Client, Forbidden, NotFound, Unavailable
+from omini_omada.client import ApiError, Client, NotFound
 
 T = TypeVar("T")
 
@@ -57,8 +57,9 @@ SETTINGS = (
 )
 # Fields of a LAN network that are read only (status, not configuration).
 READ_ONLY = {"id", "portal", "portalId", "portalName", "accessControlRule", "rateLimit", "primary"}
-VERIFY_READS = 5
-PAUSE_S = 1.0
+# How long a change waits for the controller to show it (the SDK's window).
+VERIFY_S = 30
+POLL_S = 2
 NAME_MAX = 128
 
 
@@ -198,7 +199,9 @@ def set_vlan(c: Client, sid: str, vid: int, name: str) -> None:
             "igmpSnoopEnable": False,
             "mldSnoopEnable": False,
         }
-        newer_or_older(lambda: c.post(path, body, api="v2"), lambda: c.post(path, body))
+
+        def send() -> Any:
+            return newer_or_older(lambda: c.post(path, body, api="v2"), lambda: c.post(path, body))
     elif net.get("name") != name:
         # The network as read, with the new name: nothing else changes.
         body = {
@@ -208,13 +211,16 @@ def set_vlan(c: Client, sid: str, vid: int, name: str) -> None:
         }
         body["name"] = name
         nid = net["id"]
-        newer_or_older(
-            lambda: c.patch(f"{path}/{nid}", body, api="v2"),
-            lambda: c.patch(f"{path}/{nid}", body),
-        )
+
+        def send() -> Any:
+            return newer_or_older(
+                lambda: c.patch(f"{path}/{nid}", body, api="v2"),
+                lambda: c.patch(f"{path}/{nid}", body),
+            )
     else:
         return
     wait_for(
+        send,
         lambda: (n := find_net(networks(c, sid), vid)) is not None and n.get("name") == name,
         f"the controller did not apply VLAN {vid}",
     )
@@ -230,18 +236,20 @@ def delete_vlan(c: Client, sid: str, vid: int) -> None:
             "subnet and DHCP), not a VLAN-only one: Omini only deletes VLAN-only networks. "
             "Delete it in the controller (Settings → Wired Networks → LAN) if you mean to"
         )
-    try:
-        c.delete(f"sites/{sid}/lan-networks/{net['id']}")
-    except Forbidden:
-        raise
-    except Unavailable as e:
-        if "-33566" in str(e):
-            raise PluginError(
-                f"VLAN {vid} is the native network of a switch port profile in use: "
-                "move those ports to another VLAN first"
-            ) from e
-        raise
+
+    def send() -> None:
+        try:
+            c.delete(f"sites/{sid}/lan-networks/{net['id']}")
+        except ApiError as e:
+            if e.code == -33566:
+                raise PluginError(
+                    f"VLAN {vid} is the native network of a switch port profile in use: "
+                    "move those ports to another VLAN first"
+                ) from e
+            raise
+
     wait_for(
+        send,
         lambda: find_net(networks(c, sid), vid) is None,
         f"the controller did not delete VLAN {vid}",
     )
@@ -333,7 +341,6 @@ def set_port(c: Client, sid: str, m: str, pid: int, value: dict[str, Any], label
             raise PluginError(f'the controller did not create the profile "{name}"')
         target = created
     path = f"sites/{sid}/switches/{api_mac(m)}/ports/{pid}/profile"
-    c.put(path, {"profileId": target})
 
     def done() -> bool:
         p = next((p for p in switch_ports(c, sid, m) if num(p.get("port")) == pid), None)
@@ -342,27 +349,45 @@ def set_port(c: Client, sid: str, m: str, pid: int, value: dict[str, Any], label
         by = {str(x.get("id")): x for x in profiles(c, sid) if x.get("id")}
         return port_vlans(p, by, networks(c, sid)) == want
 
-    try:
-        wait_for(done, f"the controller did not apply the VLANs of {label}")
-    except PluginError:
+    def undo() -> None:
         # Back to the profile it had; the profile made for it goes away.
-        with contextlib.suppress(Unavailable):
-            c.put(path, {"profileId": old_id})
+        c.put(path, {"profileId": old_id})
         if created:
-            with contextlib.suppress(Unavailable):
-                c.delete(f"sites/{sid}/lan-profiles/{created}")
-        raise
+            c.delete(f"sites/{sid}/lan-profiles/{created}")
+
+    wait_for(
+        lambda: c.put(path, {"profileId": target}),
+        done,
+        f"the controller did not apply the VLANs of {label}",
+        undo,
+    )
 
 
-def wait_for(check: Callable[[], bool], failure: str) -> None:
-    for i in range(VERIFY_READS):
-        if i:
-            time.sleep(PAUSE_S)
+def wait_for(
+    send: Callable[[], Any],
+    check: Callable[[], bool],
+    failure: str,
+    undo: Callable[[], Any] | None = None,
+) -> None:
+    """Sends a change (one request, all or nothing) and reads the site again
+    until ``check`` holds; a read that fails meanwhile is read again, an
+    endpoint the controller lacks stops it. ``undo`` puts things back when it
+    does not hold."""
+
+    def verify() -> bool:
         try:
-            if check():
-                return
-        except NotFound:
-            break
-        except Unavailable:
-            continue
-    raise PluginError(failure)
+            return check()
+        except NotFound as e:
+            raise Failed(str(e)) from e
+
+    apply_verify(
+        send,
+        verify,
+        undo,
+        timeout=VERIFY_S,
+        interval=POLL_S,
+        message=failure,
+        check_in="in the Omada controller",
+        undo_failed_apply=False,
+        sleep=time.sleep,
+    )

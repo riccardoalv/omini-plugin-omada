@@ -1,4 +1,6 @@
-"""Minimal client for the Omada Open API (client credentials mode).
+"""Client for the Omada Open API (client credentials mode), on the SDK's HTTP
+client: timeouts, retries (a refused connection, HTTP 429 or 503) and the
+SDK's errors.
 
 Access guide: the "Open API Access Guide" on the home page of the online
 reference (https://use1-omada-northbound.tplinkcloud.com/doc.html), sections
@@ -8,17 +10,24 @@ an error code other than 0 is a failure even with HTTP 200.
 
 from __future__ import annotations
 
-import contextlib
-import hashlib
-import json
-import os
 import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import httpx
-from omini_sdk import PluginError, log
+from omini_sdk import PluginError
+from omini_sdk.http import Client as HttpClient
+from omini_sdk.http import (
+    Forbidden,
+    HttpError,
+    NotFound,
+    Session,
+    Unauthorized,
+    Unavailable,
+)
+
+__all__ = ["ApiError", "Client", "Forbidden", "HttpError", "NotFound", "Unavailable"]
 
 # Error codes from section 1.2 of the access guide.
 INVALID_CLIENT = -44106
@@ -30,21 +39,15 @@ UNSUPPORTED_PATH = -1600
 PAGE_SIZE = 1000  # the largest page the API accepts
 
 
-class Unavailable(Exception):
-    """An endpoint that could not be read: missing on this controller version,
-    forbidden to the application's role, or failing. Optional data is skipped."""
+class ApiError(HttpError):
+    """The controller refused a change with an error code (``code``)."""
+
+    def __init__(self, message: str, *, code: Any = None, **kw: Any):
+        super().__init__(message, **kw)
+        self.code = code
 
 
-class Forbidden(Unavailable):
-    """The application's role may not do this (error -1005/-1505 or HTTP 403)."""
-
-
-class NotFound(Unavailable):
-    """The path does not exist on this controller version (HTTP 404 or error
-    -1600): an older or newer version of the endpoint may."""
-
-
-class Client:
+class Client(HttpClient):
     def __init__(
         self,
         url: str,
@@ -52,38 +55,33 @@ class Client:
         client_secret: str,
         verify_tls: bool = False,
         state_dir: Path | None = None,
-        timeout: float = 10,
+        timeout: float = 15,
         transport: httpx.BaseTransport | None = None,
         min_interval: float = 0.12,
-        sleep: Callable[[float], None] = time.sleep,
+        sleep: Callable[[float], None] | None = None,
     ):
-        url = url.strip().rstrip("/")
-        if not url.startswith(("https://", "http://")):
-            url = "https://" + url
-        self.base = url
+        super().__init__(
+            url,
+            name="Omada controller",
+            verify_tls=verify_tls,
+            timeout=timeout,
+            user_agent="omini-plugin-omada",
+            unauthorized="the Omada controller rejected the access token",
+            transport=transport,
+            sleep=sleep,
+        )
         self.client_id = client_id
         self.client_secret = client_secret
-        self.state_dir = state_dir
         # Omada controllers allow about 10 requests per second (access guide,
-        # "API call budget"): requests are spaced a little above that.
+        # "API call budget"): requests are spaced a little above that. A 429
+        # is asked again by the SDK's client.
         self.min_interval = min_interval
-        self.sleep = sleep
         self._last = 0.0
-        self.http = httpx.Client(
-            base_url=url,
-            verify=verify_tls,
-            timeout=timeout,
-            headers={"Accept": "application/json", "User-Agent": "omini-plugin-omada"},
-            transport=transport,
-        )
         self._info: dict[str, Any] | None = None
         self._token: str | None = None
-        self._cache_key = hashlib.sha256(
-            f"{url}\n{client_id}\n{client_secret}".encode()
-        ).hexdigest()
-
-    def close(self) -> None:
-        self.http.close()
+        # The access token, kept in token.json (tied to a hash of the address
+        # and credentials; the secret is never stored).
+        self.session = Session(state_dir, self.base, client_id, client_secret, name="token")
 
     # -- controller -------------------------------------------------------
 
@@ -91,8 +89,8 @@ class Client:
         """``GET /api/info``: the controller's version and Omada ID (omadacId).
         Needs no login; the controller's own web interface reads it first."""
         if self._info is None:
-            r = self._send("GET", "/api/info")
-            body = self._json(r)
+            r = self.send("GET", "/api/info")
+            body = self.json(r)
             result = body.get("result") if isinstance(body, dict) else None
             if r.status_code >= 400 or not isinstance(result, dict) or not result.get("omadacId"):
                 raise PluginError(
@@ -108,61 +106,38 @@ class Client:
 
     # -- access token -----------------------------------------------------
 
-    @property
-    def _token_file(self) -> Path | None:
-        return self.state_dir / "token.json" if self.state_dir else None
-
     def _cached_token(self) -> str | None:
-        f = self._token_file
-        if not f or not f.exists():
-            return None
+        data = self.session.load()
         try:
-            data = json.loads(f.read_text())
-        except (OSError, ValueError):
+            fresh = float(data.get("expiresAt", 0)) > time.time() + 60
+        except (TypeError, ValueError):
             return None
-        if (
-            data.get("key") == self._cache_key
-            and data.get("omadacId") == self.omadac_id
-            and float(data.get("expiresAt", 0)) > time.time() + 60
-        ):
-            return data.get("accessToken")
+        if data.get("omadacId") == self.omadac_id and fresh and data.get("accessToken"):
+            return str(data["accessToken"])
         return None
 
     def _save_token(self, token: str, expires_in: float) -> None:
-        f = self._token_file
-        if not f:
-            return
-        try:
-            f.parent.mkdir(parents=True, exist_ok=True)
-            fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "w") as out:
-                json.dump(
-                    {
-                        "key": self._cache_key,  # hash of address + credentials
-                        "omadacId": self.omadac_id,
-                        "accessToken": token,
-                        "expiresAt": time.time() + expires_in,
-                    },
-                    out,
-                )
-        except OSError as e:
-            log.debug("could not keep the access token: %s", e)
+        self.session.save(
+            {
+                "omadacId": self.omadac_id,
+                "accessToken": token,
+                "expiresAt": time.time() + expires_in,
+            }
+        )
 
     def _forget_token(self) -> None:
         self._token = None
-        f = self._token_file
-        if f and f.exists():
-            with contextlib.suppress(OSError):
-                f.unlink()
+        self.session.clear()
 
     def authorize(self) -> str:
         """A new access token (client credentials mode, access guide 2.3.1).
         Valid for 2 hours. A new one is requested when it expires instead of
         using the refresh token: the refresh request carries the secret in the
         URL, and client mode can always ask again."""
-        r = self._send(
+        path = "/openapi/authorize/token"
+        r = self.send(
             "POST",
-            "/openapi/authorize/token",
+            path,
             params={"grant_type": "client_credentials"},
             json={
                 "omadacId": self.omadac_id,
@@ -170,10 +145,17 @@ class Client:
                 "client_secret": self.client_secret,
             },
         )
-        body = self._json(r)
+        body = self.json(r, path)
         code = body.get("errorCode") if isinstance(body, dict) else None
         if code == INVALID_CLIENT or r.status_code == 401:
-            raise PluginError("the Omada controller rejected the client ID or secret")
+            raise Unauthorized(
+                "the Omada controller rejected the client ID or secret",
+                status=r.status_code,
+                method="POST",
+                resource=path,
+            )
+        if r.status_code >= 400 and code is None:
+            self.check(r, "POST", path)
         result = body.get("result") if isinstance(body, dict) else None
         if code != 0 or not isinstance(result, dict) or not result.get("accessToken"):
             msg = body.get("msg") if isinstance(body, dict) else None
@@ -192,60 +174,60 @@ class Client:
 
     # -- API --------------------------------------------------------------
 
-    def get(self, path: str, params: dict[str, Any] | None = None, api: str = "v1") -> Any:
+    def get(self, path: str, params: dict[str, Any] | None = None, api: str = "v1") -> Any:  # type: ignore[override]
         """GETs ``/openapi/{api}/{omadacId}/<path>`` and returns its ``result``
         (``api`` is v1, or v2 for the endpoints that have a newer version)."""
         return self._call("GET", path, params=params, api=api)
 
-    def put(self, path: str, body: dict[str, Any]) -> Any:
+    def put(self, path: str, body: dict[str, Any]) -> Any:  # type: ignore[override]
         """PUTs a configuration change (only ``apply`` calls it, for the changes
         the manifest declares). Whether it took effect is checked by reading
         again, never assumed from the answer."""
         return self._call("PUT", path, json=body)
 
-    def post(self, path: str, body: dict[str, Any], api: str = "v1") -> Any:
+    def post(self, path: str, body: dict[str, Any], api: str = "v1") -> Any:  # type: ignore[override]
         """POSTs something new (a change, as put)."""
         return self._call("POST", path, json=body, api=api)
 
-    def patch(self, path: str, body: dict[str, Any], api: str = "v1") -> Any:
+    def patch(self, path: str, body: dict[str, Any], api: str = "v1") -> Any:  # type: ignore[override]
         """PATCHes a configuration change (as put)."""
         return self._call("PATCH", path, json=body, api=api)
 
-    def delete(self, path: str) -> Any:
+    def delete(self, path: str) -> Any:  # type: ignore[override]
         """DELETEs something (a change, as put)."""
         return self._call("DELETE", path)
 
     def _call(self, method: str, path: str, api: str = "v1", **kwargs: Any) -> Any:
         full = f"/openapi/{api}/{self.omadac_id}/{path.lstrip('/')}"
+        where = {"method": method, "resource": path}
         for attempt in range(2):
-            r = self._send(
+            r = self.send(
                 method, full, headers={"Authorization": f"AccessToken={self.token()}"}, **kwargs
             )
             if r.status_code == 401 and attempt == 0:
                 self._forget_token()
                 continue
-            if r.status_code == 401:
-                raise PluginError("the Omada controller rejected the access token")
-            if r.status_code == 403:
-                raise Forbidden(f"{path}: HTTP 403")
-            if r.status_code == 404:
-                raise NotFound(f"{path}: HTTP 404")
-            if r.status_code >= 400:
-                raise Unavailable(f"{path}: HTTP {r.status_code}")
-            body = self._json(r)
+            # 401 Unauthorized, 403 Forbidden, 404 NotFound, 429/5xx
+            # Unavailable, another 4xx HttpError.
+            self.check(r, method, path)
+            body = self.json(r, path)
             if not isinstance(body, dict):
-                raise Unavailable(f"{path}: unexpected answer")
+                raise Unavailable(f"{path}: unexpected answer", status=r.status_code, **where)
             code = body.get("errorCode")
             if code in (TOKEN_EXPIRED, TOKEN_INVALID) and attempt == 0:
                 self._forget_token()
                 continue
             if code == 0:
                 return body.get("result")
+            msg = f"{path}: error {code} ({body.get('msg')})"
             if code in FORBIDDEN:
-                raise Forbidden(f"{path}: error {code} ({body.get('msg')})")
+                raise Forbidden(msg, **where)
             if code == UNSUPPORTED_PATH:
-                raise NotFound(f"{path}: error {code} ({body.get('msg')})")
-            raise Unavailable(f"{path}: error {code} ({body.get('msg')})")
+                raise NotFound(msg, status=r.status_code, **where)
+            if method == "GET":
+                # A read the controller fails to answer: optional data is skipped.
+                raise Unavailable(msg, status=r.status_code, **where)
+            raise ApiError(msg, code=code, status=r.status_code, **where)
         raise PluginError("the Omada controller keeps refusing new access tokens")
 
     def pages(
@@ -267,31 +249,12 @@ class Client:
 
     # -- transport --------------------------------------------------------
 
-    def _send(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        for attempt in range(3):
-            wait = self.min_interval - (time.monotonic() - self._last)
-            if wait > 0:
-                self.sleep(wait)
-            try:
-                r = self.http.request(method, path, **kwargs)
-            except httpx.ConnectError as e:
-                raise PluginError(f"cannot connect to {self.base}: {e}") from e
-            except httpx.TimeoutException as e:
-                raise PluginError(f"{self.base} did not answer in time") from e
-            except httpx.HTTPError as e:
-                raise PluginError(f"request to {self.base} failed: {e}") from e
-            finally:
-                self._last = time.monotonic()
-            if r.status_code == 429 and attempt < 2:  # API rate limit exceeded
-                self.sleep(1.0)
-                continue
-            return r
-        return r
-
-    def _json(self, r: httpx.Response) -> Any:
+    def send(self, method: str, path: str, **kw: Any) -> httpx.Response:
+        """Sends a request (with the SDK's retries), spaced from the last one."""
+        wait = self.min_interval - (time.monotonic() - self._last)
+        if wait > 0:
+            (self.sleep or time.sleep)(wait)
         try:
-            return r.json()
-        except (json.JSONDecodeError, UnicodeDecodeError) as e:
-            raise PluginError(
-                f"{self.base} did not answer with JSON: is it the Omada controller's address?"
-            ) from e
+            return super().send(method, path, **kw)
+        finally:
+            self._last = time.monotonic()

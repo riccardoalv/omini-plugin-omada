@@ -13,8 +13,13 @@ import time
 from typing import Any
 
 from omini_sdk import PluginError
+from omini_sdk.changes import apply_verify
 
-from omini_omada.client import Client, Unavailable
+from omini_omada.client import Client
+
+# How long a change waits for the controller to show it (the SDK's window).
+VERIFY_S = 30
+POLL_S = 2
 
 # 0 none, 3 WPA-Personal. 2 (WPA-Enterprise) has no value in the data model:
 # it and any other code are left empty.
@@ -111,6 +116,11 @@ def named(rows: list[tuple[str, dict[str, Any]]], name: str) -> tuple[str, dict[
 
 
 def set_wifi(c: Client, sid: str, want: dict[str, Any]) -> None:
+    """Sends the SSID's change, then reads the site again until it has it."""
+    wait_for(c, lambda: send_wifi(c, sid, want), lambda: shown(c, sid, want))
+
+
+def send_wifi(c: Client, sid: str, want: dict[str, Any]) -> None:
     rows = ssids(c, sid)
     found = named(rows, str(want.get("previous") or "")) or named(rows, str(want["ssid"]))
     if found is None:
@@ -175,25 +185,32 @@ def delete_wifi(c: Client, sid: str, ssid: str) -> None:
     if found is None:
         raise PluginError(f'the site has no Wi-Fi network "{ssid}"')
     wid, s = found
-    c.delete(f"sites/{sid}/wireless-network/wlans/{wid}/ssids/{s['ssidId']}")
+    wait_for(
+        c,
+        lambda: c.delete(f"sites/{sid}/wireless-network/wlans/{wid}/ssids/{s['ssidId']}"),
+        lambda: not any(n["ssid"] == ssid for n in wifi_networks(ssids(c, sid))),
+    )
 
 
-def check(c: Client, sid: str, want: dict[str, Any] | None, gone: str | None = None) -> None:
-    for i in range(5):
-        try:
-            nets = wifi_networks(ssids(c, sid))
-        except Unavailable:
-            nets = []
-        if gone is not None and not any(n["ssid"] == gone for n in nets):
-            return
-        if want is not None:
-            n = next((n for n in nets if n["ssid"] == want["ssid"]), None)
-            if (
-                n
-                and (want.get("vlan") is None or (n["vlan"] or 1) == int(want["vlan"]))
-                and (want.get("enabled") is None or n["enabled"] == bool(want["enabled"]))
-            ):
-                return
-        if i < 4:
-            time.sleep(1)
-    raise PluginError("the controller did not apply the Wi-Fi change")
+def shown(c: Client, sid: str, want: dict[str, Any]) -> bool:
+    """Whether the site has the SSID as asked (its VLAN and on/off)."""
+    n = next((n for n in wifi_networks(ssids(c, sid)) if n["ssid"] == want["ssid"]), None)
+    return bool(
+        n
+        and (want.get("vlan") is None or (n["vlan"] or 1) == int(want["vlan"]))
+        and (want.get("enabled") is None or n["enabled"] == bool(want["enabled"]))
+    )
+
+
+def wait_for(c: Client, send: Any, verify: Any) -> None:
+    """Sends a change and reads the site again (a read that fails meanwhile is
+    read again) until it shows it. A Wi-Fi change is not undone: a changed
+    password cannot be put back (the controller never shows it)."""
+    apply_verify(
+        send,
+        verify,
+        timeout=VERIFY_S,
+        interval=POLL_S,
+        message="the controller did not apply the Wi-Fi change",
+        sleep=time.sleep,
+    )

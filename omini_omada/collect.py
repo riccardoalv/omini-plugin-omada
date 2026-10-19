@@ -26,15 +26,17 @@ from omini_sdk import (
     Transceiver,
     Vlan,
     WirelessClient,
-    log,
 )
+from omini_sdk import optional as sdk_optional
+from omini_sdk.changes import apply_verify
+from omini_sdk.http import settings
 
 from omini_omada import backup as bk
 from omini_omada import gateway as gw
 from omini_omada import radios as rd
 from omini_omada import vlans as vl
 from omini_omada import wifi as wlan
-from omini_omada.client import Client, Forbidden, Unavailable
+from omini_omada.client import Client, Forbidden, HttpError, Unavailable
 
 T = TypeVar("T")
 
@@ -60,11 +62,11 @@ CONNECTORS = {1: "rj45", 3: "sfp"}
 # 3 heartbeat missed, 4 isolated. Disconnected and pending ones are left out.
 SKIPPED_STATUS = (0, 2)
 SOURCE = "omada"
-# After a change, the controller is read again this many times, this far apart,
-# until the switch's port shows it (about 40 s, as the other changes of the
+# After a port change, the controller is read again every POLL_S seconds, up
+# to VERIFY_S, until the switch's port shows it (40 s, as switch ports in the
 # UniFi plugin: the controller pushes the change to the switch first).
-VERIFY_READS = 14
-VERIFY_PAUSE_S = 3.0
+VERIFY_S = 40
+POLL_S = 3
 
 
 # -- small helpers --------------------------------------------------------
@@ -152,12 +154,9 @@ def prefix_len(netmask: Any) -> int | None:
 
 
 def optional(what: str, fn: Callable[[], T]) -> T | None:
-    """Data that some versions or roles do not offer: skipped on failure."""
-    try:
-        return fn()
-    except Unavailable as e:
-        log.debug("skipped %s: %s", what, e)
-        return None
+    """Data that some versions or roles do not offer: skipped (logged once)
+    when it is forbidden, missing or fails to answer."""
+    return sdk_optional(what, fn, None)
 
 
 # -- devices --------------------------------------------------------------
@@ -679,15 +678,13 @@ def make_client(cfg: Config) -> Client:
     secret = cfg.str("client_secret")
     if not url or not client_id or not secret:
         raise PluginError("the controller address, client ID and client secret are required")
-    return Client(
-        url, client_id, secret, verify_tls=cfg.bool("verify_tls"), state_dir=cfg.state_dir
-    )
+    return Client(url, client_id, secret, state_dir=cfg.state_dir, **settings(cfg))
 
 
 def pick_site(client: Client, wanted: str) -> dict[str, Any]:
     try:
         sites = client.pages("sites")
-    except Unavailable as e:
+    except HttpError as e:
         raise PluginError(f"cannot list the sites: {e}") from e
     sites = [s for s in sites if s.get("siteId")]
     if not sites:
@@ -707,7 +704,7 @@ def pick_site(client: Client, wanted: str) -> dict[str, Any]:
 def site_devices(client: Client, site: dict[str, Any]) -> list[dict[str, Any]]:
     try:
         return client.pages(f"sites/{site['siteId']}/devices")
-    except Unavailable as e:
+    except HttpError as e:
         raise PluginError(
             f'cannot read the devices of site "{site.get("name")}" ({e}): check the '
             "application's role and site privileges"
@@ -859,54 +856,46 @@ def apply(cfg: Config, change: Change) -> list[Device]:
         pid = port_number(change.port or "")
         try:
             port = switch_port(client, sid, change.device, pid) if pid is not None else None
-        except Unavailable as e:
+        except HttpError as e:
             raise PluginError(f"cannot read the switch's ports ({e})") from e
-        if port is None:
+        if port is None or pid is None:
             raise PluginError(f"the switch has no {change.port}")
         if port.get("disable") is not (not change.value):
-            try:
-                client.put(
-                    f"sites/{sid}/switches/{api_mac(change.device)}/ports/{pid}/status",
-                    {"status": 1 if change.value else 0},
-                )
-            except Forbidden as e:
-                raise PluginError(WRITE_ROLE) from e
-            except Unavailable as e:
-                raise PluginError(
-                    f"the controller refused to change {change.port} ({e}): nothing was changed"
-                ) from e
-            if not applied(client, sid, change.device, pid, change.value):
-                # Not confirmed: send the previous status back, so the port is
-                # not left changed behind an error.
-                try:
-                    client.put(
-                        f"sites/{sid}/switches/{api_mac(change.device)}/ports/{pid}/status",
-                        {"status": 0 if change.value else 1},
-                    )
-                    undo = "it was set back"
-                except (Forbidden, Unavailable) as e:
-                    log.warning("could not set %s back: %s", change.port, e)
-                    undo = "setting it back failed too"
-                raise PluginError(
-                    f"the controller did not apply the change to {change.port} ({undo})"
-                )
+            set_port_status(client, sid, change.device, pid, change.port or "", change.value)
     finally:
         client.close()
     return collect(cfg)
 
 
-def applied(client: Client, site: str, m: str, pid: int, enabled: bool) -> bool:
-    for i in range(VERIFY_READS):
-        if i:
-            time.sleep(VERIFY_PAUSE_S)
-        try:
-            port = switch_port(client, site, m, pid)
-        except Unavailable as e:
-            log.warning("could not read the switch's ports again: %s", e)
-            continue
-        if port is not None and port.get("disable") is (not enabled):
-            return True
-    return False
+def set_port_status(client: Client, site: str, m: str, pid: int, label: str, on: bool) -> None:
+    """Sends the port's new status and reads the switch again until it shows
+    it; the previous status is sent back when it does not."""
+    path = f"sites/{site}/switches/{api_mac(m)}/ports/{pid}/status"
+
+    def shown() -> bool:
+        port = switch_port(client, site, m, pid)
+        return port is not None and port.get("disable") is (not on)
+
+    try:
+        apply_verify(
+            lambda: client.put(path, {"status": 1 if on else 0}),
+            shown,
+            lambda: client.put(path, {"status": 0 if on else 1}),
+            timeout=VERIFY_S,
+            interval=POLL_S,
+            message=f"the controller did not apply the change to {label}",
+            check_in="in the Omada controller",
+            undo_failed_apply=False,  # one PUT: all or nothing
+            sleep=time.sleep,
+        )
+    except Forbidden as e:
+        raise PluginError(WRITE_ROLE) from e
+    except Unavailable:
+        raise
+    except HttpError as e:
+        raise PluginError(
+            f"the controller refused to change {label} ({e}): nothing was changed"
+        ) from e
 
 
 def apply_vlans(cfg: Config, change: Change) -> list[Device]:
@@ -952,7 +941,7 @@ def apply_vlans(cfg: Config, change: Change) -> list[Device]:
                 vl.set_port(client, sid, change.device, pid, value, change.port or "")
         except Forbidden as e:
             raise PluginError(VLAN_ROLE) from e
-        except Unavailable as e:
+        except HttpError as e:
             raise PluginError(f"the controller refused the VLAN change ({e})") from e
     finally:
         client.close()
@@ -970,13 +959,11 @@ def apply_wifi(cfg: Config, change: Change) -> list[Device]:
         try:
             if change.kind == "wifi.set":
                 wlan.set_wifi(client, sid, value)
-                wlan.check(client, sid, value)
             else:
                 wlan.delete_wifi(client, sid, str(value.get("ssid") or ""))
-                wlan.check(client, sid, None, gone=str(value.get("ssid") or ""))
         except Forbidden as e:
             raise PluginError(VLAN_ROLE) from e
-        except Unavailable as e:
+        except HttpError as e:
             raise PluginError(f"the controller refused the Wi-Fi change ({e})") from e
     finally:
         client.close()

@@ -34,7 +34,7 @@ One Omini device per managed gateway, switch and access point (its key is its MA
 
 1. The plugin reads the switch's ports (`GET .../sites/{siteId}/stat/switches/{switchMac}`) and finds the port by its number (Omini's `Port 5` is port `5`). If the port is already in the requested state, nothing is sent.
 2. It sends `PUT /openapi/v1/{omadacId}/sites/{siteId}/switches/{switchMac}/ports/{port}/status` with `{"status": 0}` (off) or `{"status": 1}` (on): Switch → *Set port status for given port*. Only the port's on/off state travels; its profile, name, VLANs, PoE and the rest of its settings are not part of the request and stay as they are.
-3. It reads the switch's ports again (for about 40 seconds, every 3 seconds) until the port's `disable` flag shows the change; if it does not, it sends the previous status back and the change is reported as failed.
+3. It reads the switch's ports again (for up to 40 seconds, every 3 seconds; a read that fails meanwhile is read again) until the port's `disable` flag shows the change; if it does not, it sends the previous status back and the error ends "(undone)", or "(could not be undone: check it in the Omada controller)" when that fails too. A status the controller refuses is not sent back (nothing was changed).
 4. There is nothing to save: the controller keeps the change in its own configuration and pushes it to the switch (also after the switch reboots or is re-adopted).
 
 The change needs an application whose role may modify the site's devices (see below). With a **Viewer** application the map works as before, and a change fails with a message that says which role to give the application.
@@ -43,7 +43,7 @@ Collecting only reads: no other endpoint that changes configuration, starts a ch
 
 ### Wi-Fi per VLAN
 
-`wifi.set` and `wifi.delete` manage the site's Wi-Fi networks through the Open API's wireless network endpoints, from the VLANs tab of Omini: the SSID's name, its VLAN (`vlanSetting`), its password and whether it is on (`.../ssids/{id}/enable`). A new SSID is WPA2 personal (`security` 3, `versionPsk` 2) on both bands, in the site's first WLAN group. The controller keeps it and pushes it to every access point; the plugin reads the site again until it has it. The password goes to the controller only. An enterprise (802.1X) SSID shows no security in Omini. Omini shows one Wi-Fi network per name, so a name used by SSIDs of several WLAN groups cannot be changed or deleted from it (the change is refused with a message). Not verified on hardware: the request bodies follow the controller's web API, which the Open API mirrors.
+`wifi.set` and `wifi.delete` manage the site's Wi-Fi networks through the Open API's wireless network endpoints, from the VLANs tab of Omini: the SSID's name, its VLAN (`vlanSetting`), its password and whether it is on (`.../ssids/{id}/enable`). A new SSID is WPA2 personal (`security` 3, `versionPsk` 2) on both bands, in the site's first WLAN group. The controller keeps it and pushes it to every access point; the plugin reads the site again (every 2 seconds, up to 30) until it has it; a Wi-Fi change is not undone (a changed password could not be put back). The password goes to the controller only. An enterprise (802.1X) SSID shows no security in Omini. Omini shows one Wi-Fi network per name, so a name used by SSIDs of several WLAN groups cannot be changed or deleted from it (the change is refused with a message). Not verified on hardware: the request bodies follow the controller's web API, which the Open API mirrors.
 
 ### VLANs
 
@@ -51,10 +51,12 @@ Omada keeps VLANs per **site**: they are the site's LAN networks (*Settings → 
 
 - **`vlan.set`** (`{id, name}`) creates a **VLAN-only** network (purpose *VLAN*, no subnet or DHCP: routing stays on your router) with that VLAN id, or renames the network that has it (the network is sent back as read, with only the name changed). Creating a network makes the controller add its own profile for it (native = that network).
 - **`vlan.delete`** (`{id}`) deletes a VLAN-only network. A gateway network (purpose *Interface*, with its own subnet and DHCP) is refused with a message: delete it in the controller if you mean to. The controller itself refuses to delete a network that is the native network of a profile in use; the message says to move those ports first.
-- **`port.vlans`** (`{untagged, tagged}`) gives the switch port a profile with exactly those VLANs (Switch → *Set profile for given port*). The plugin never modifies a profile (other ports use them): it picks an existing profile with exactly those VLANs **and** the same other settings as the port's current profile (PoE, 802.1X, port isolation, LLDP-MED, bandwidth/storm control, spanning tree, loopback detection, EEE, flow control, DHCP L2 relay), so the port keeps everything but its VLANs; if there is none, it creates one copied from the current profile with the VLANs replaced, named `Omini <native> <tagged,…>` (for example `Omini 10 20,30`; `(2)`, `(3)`… when the name is taken). Then it reads the switch again until the port shows the new profile and VLANs; if it does not, the port goes back to its previous profile and the profile made for it is deleted.
+- **`port.vlans`** (`{untagged, tagged}`) gives the switch port a profile with exactly those VLANs (Switch → *Set profile for given port*). The plugin never modifies a profile (other ports use them): it picks an existing profile with exactly those VLANs **and** the same other settings as the port's current profile (PoE, 802.1X, port isolation, LLDP-MED, bandwidth/storm control, spanning tree, loopback detection, EEE, flow control, DHCP L2 relay), so the port keeps everything but its VLANs; if there is none, it creates one copied from the current profile with the VLANs replaced, named `Omini <native> <tagged,…>` (for example `Omini 10 20,30`; `(2)`, `(3)`… when the name is taken). Then it reads the switch again (every 2 seconds, up to 30) until the port shows the new profile and VLANs; if it does not, the port goes back to its previous profile and the profile made for it is deleted ("(undone)"; "(could not be undone: check it in the Omada controller)" when that fails).
   - Every Omada port has a native network: a trunk without an untagged VLAN is refused.
   - Ports in a **LAG**, ports with **Profile Override** on (their own settings win over the profile) and ports whose profile has extra untagged networks or is *Disable* show no VLANs in Omini and cannot be changed from it (a change is refused with the reason).
   - Profiles made by Omini stay in the controller when no port uses them any more; delete them there if you like.
+
+`vlan.set` and `vlan.delete` are read back the same way (every 2 seconds, up to 30).
 
 There is no global "VLAN mode" to turn on in Omada: a switch adopted by the controller always follows the site's networks and profiles. All of this goes through the controller, which keeps the change and pushes it to the switches; there is nothing to save on the switch.
 
@@ -69,6 +71,7 @@ Omini keeps a history of each device's configuration (never restored from it). T
 
 ## Requirements
 
+- **Omini 1.7 or later** (the plugin uses the SDK's HTTP client, optional reads and change checks).
 - **Omada Software Controller** or a hardware controller **OC200 / OC300**, **version 5.9 or later** (the Open API appeared in 5.9; client mode with *Site Privileges* in later 5.x releases).
 - The **Omada Cloud-Based Controller** is out of scope (its Open API lives on a regional TP-Link domain, not on your network).
 - The controller must be reachable from Omini over HTTPS (Software Controller: port 8043 by default; OC200/OC300: 443).
@@ -97,7 +100,8 @@ Changing the app's role or site privileges, or copying/importing sites, invalida
 | Client ID | The app's client ID |
 | Client secret | The app's client secret (stored encrypted by Omini, never logged) |
 | Site | Name of the site to read. Empty: the controller's default site (else the first one the app can see). One integration reads one site; add another integration for another site |
-| Verify the TLS certificate | Off by default: controllers use a self-signed certificate. Turn it on if yours is trusted |
+| Verify the TLS certificate (Advanced) | Off by default: controllers use a self-signed certificate. Turn it on if yours is trusted |
+| Timeout (Advanced) | Seconds to wait for each answer of the controller (15 by default); a refused connection or a busy controller (HTTP 429, 503) is asked again |
 
 ## How it works
 
@@ -135,9 +139,9 @@ All endpoints are from the official Open API reference, [use1-omada-northbound.t
 Notes:
 
 - **Collecting only reads.** The one `POST` it sends is the token request; the writes above (port status and profile, LAN networks, port profiles, Wi-Fi) are sent only to apply a change asked for in Omini. No endpoint that starts a check or an upgrade is ever called.
-- **Token** kept in the integration's state folder (file readable only by Omini, tied to the address and credentials by a hash; the secret itself is not stored there). When it expires (error `-44112`/`-44113`) the plugin asks for a new one with the client credentials instead of the refresh token, whose request would carry the secret in the URL.
-- **Rate limit**: the controller allows about 10 requests per second; the plugin spaces its requests (~8 per second) and waits a second on HTTP 429. A site with *N* switches and *M* APs takes about 8 + 4·N + 3·M + 3 per gateway requests.
-- **Optional data** (anything but the site list and the device list) is skipped when an endpoint is missing on the controller's version or forbidden to the app's role: the rest of the collection goes on.
+- **Token** kept in the integration's state folder (`token.json`, readable only by Omini, tied to the address and credentials by a hash; the secret itself is not stored there; a file saved by an older version is ignored, costing one token request). When it expires (error `-44112`/`-44113`) the plugin asks for a new one with the client credentials instead of the refresh token, whose request would carry the secret in the URL.
+- **Rate limit**: the controller allows about 10 requests per second; the plugin spaces its requests (~8 per second); on HTTP 429 (or 503) it asks again twice, after the controller's `Retry-After` (up to 10 s) or 1 then 2 seconds. A site with *N* switches and *M* APs takes about 8 + 4·N + 3·M + 3 per gateway requests.
+- **Optional data** (anything but the site list and the device list) is skipped (logged once) when an endpoint is missing on the controller's version, forbidden to the app's role or fails to answer: the rest of the collection goes on.
 - Paged lists are read 1000 rows at a time until `totalRows`.
 - Switch ports are named `Port 1`, `Port 2`… after their port number (stable even when renamed in the controller); the name given in the controller becomes the port's description.
 

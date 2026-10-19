@@ -20,8 +20,9 @@ import time
 from typing import Any
 
 from omini_sdk import PluginError
+from omini_sdk.changes import Failed, Pending, apply_verify
 
-from omini_omada.client import Client, Unavailable
+from omini_omada.client import Client
 
 # (Omini's name, band, live block, settings block)
 RADIOS = [
@@ -109,8 +110,9 @@ def wireless_uplink(info: dict[str, Any]) -> bool | None:
 # block, only its channel changed, read back until the radio is on it.
 
 RADIO_CONFIG = "radio-config"
-VERIFY_READS = 20
-PAUSE_S = 3.0
+# A radio on a DFS channel listens 60 s before it sends.
+VERIFY_S = 60
+POLL_S = 3
 
 CHANNELS = {
     "2.4ghz": set(range(1, 14)),
@@ -149,22 +151,24 @@ def set_channel_unverified(c: Client, sid: str, ap: str, value: Any) -> None:
         **before,
         "channel": str(channel) if isinstance(before.get("channel"), str) else channel,
     }
-    c.patch(f"{path}/{RADIO_CONFIG}", {setting_key: after})
-    for i in range(VERIFY_READS):
-        if i:
-            time.sleep(PAUSE_S)
-        try:
-            setting = (c.get(path) or {}).get(setting_key) or {}
-            live = (c.get(f"{path}/radios") or {}).get(live_key) or {}
-        except Unavailable:
-            continue
+
+    def moved() -> bool:
+        setting = (c.get(path) or {}).get(setting_key) or {}
         if num(setting.get("channel")) != channel:
-            break  # the controller did not keep it
+            raise Failed("the controller did not keep it")
+        live = (c.get(f"{path}/radios") or {}).get(live_key) or {}
         if channel_of(live.get("actualChannel")) == channel:
-            return
-    try:
-        c.patch(f"{path}/{RADIO_CONFIG}", {setting_key: before})
-        undone = "undone on the controller"
-    except Unavailable as e:
-        undone = f"not undone ({e}): check the radio in the controller"
-    raise PluginError(f"the radio did not move to channel {channel}; the change was {undone}")
+            return True
+        raise Pending(f"the radio did not report channel {channel} within {VERIFY_S} s")
+
+    apply_verify(
+        lambda: c.patch(f"{path}/{RADIO_CONFIG}", {setting_key: after}),
+        moved,
+        lambda: c.patch(f"{path}/{RADIO_CONFIG}", {setting_key: before}),
+        timeout=VERIFY_S,
+        interval=POLL_S,
+        message=f"the radio did not move to channel {channel}",
+        check_in="in the Omada controller",
+        undo_failed_apply=False,  # one PATCH: all or nothing
+        sleep=time.sleep,
+    )

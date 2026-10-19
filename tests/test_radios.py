@@ -74,7 +74,6 @@ def test_unknown_widths_stay_empty():
 @pytest.fixture
 def radio_api(omada, monkeypatch):
     """The controller, also taking PATCH .../aps/{apMac}/radio-config."""
-    monkeypatch.setattr(radios_module, "PAUSE_S", 0)
     omada.patches = []
     omada.radio_stuck = False  # keeps the setting, the radio never moves
     inner = omada.handler
@@ -119,9 +118,8 @@ def test_moves_a_radio_keeping_its_other_settings(radio_api, cfg):
 
 
 def test_undone_when_the_radio_does_not_move(radio_api, cfg, monkeypatch):
-    monkeypatch.setattr(radios_module, "VERIFY_READS", 2)
     radio_api.radio_stuck = True
-    with pytest.raises(PluginError, match="undone on the controller"):
+    with pytest.raises(PluginError, match=r"did not report channel 11 within 60 s \(undone\)$"):
         radios_module.set_channel_unverified(
             make_client(cfg), SITE, "50-C7-BF-00-00-03", {"radio": "2.4 GHz", "channel": 11}
         )

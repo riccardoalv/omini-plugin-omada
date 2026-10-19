@@ -200,7 +200,6 @@ class Lan:
 
 @pytest.fixture
 def lan(omada, monkeypatch):
-    monkeypatch.setattr(vlans_module, "PAUSE_S", 0)
     state = Lan()
     inner = omada.handler
 
@@ -404,3 +403,24 @@ def test_a_viewer_application_is_told_which_role_it_needs(lan, cfg):
     collect_module.Client.keywords["transport"] = httpx.MockTransport(handler)
     with pytest.raises(PluginError, match="Modify permission on Site Settings"):
         run(cfg, "port.vlans", {"untagged": 1, "tagged": [10, 20]}, "Port 6")
+
+
+def test_an_undo_that_fails_says_so(lan, cfg):
+    lan.ignore = True
+    inner = collect_module.Client.keywords["transport"].handler
+    puts = []
+
+    def handler(request):
+        if request.method == "PUT":
+            puts.append(1)
+            if len(puts) > 1:  # the profile change goes through, putting it back does not
+                return fail(-1001, "Invalid request parameters.")
+        return inner(request)
+
+    collect_module.Client.keywords["transport"] = httpx.MockTransport(handler)
+    with pytest.raises(
+        PluginError,
+        match=r"did not apply the VLANs of Port 6: .*\(could not be undone: check it in the "
+        r"Omada controller\)$",
+    ):
+        run(cfg, "port.vlans", {"untagged": 10, "tagged": [20]}, "Port 6")

@@ -63,12 +63,14 @@ def test_an_error_when_the_controller_did_not_take_it(omada, cfg):
         return inner(request)
 
     collect_module.Client.keywords["transport"] = httpx.MockTransport(handler)
-    with pytest.raises(PluginError, match="did not apply the change to Port 6"):
+    with pytest.raises(
+        PluginError, match=r"did not apply the change to Port 6: .* within 40 s \(undone\)$"
+    ):
         apply(cfg, change())
     # Sent once, read again for the whole window, never retried blindly; then
     # the previous status is sent back so nothing is left half-changed.
     assert omada.puts == [(STATUS.format(6), {"status": 0}), (STATUS.format(6), {"status": 1})]
-    assert len(reads) >= 1 + collect_module.VERIFY_READS
+    assert len(reads) == 1 + collect_module.VERIFY_S // collect_module.POLL_S + 1
 
 
 def test_nothing_is_sent_when_the_port_is_already_so(omada, cfg):
@@ -108,4 +110,4 @@ def test_a_viewer_application_is_told_which_role_it_needs(omada, cfg):
 def test_the_port_change_is_awaited_like_the_other_changes():
     # The controller pushes the change to the switch: read it again for
     # about 40 s (as the UniFi plugin does), not 3.
-    assert collect_module.VERIFY_READS * collect_module.VERIFY_PAUSE_S >= 30
+    assert collect_module.VERIFY_S >= 30

@@ -13,13 +13,16 @@ out, and every list is sorted, so two backups of an unchanged site are equal.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any
 
-from omini_sdk import ConfigBackup, PluginError, log
+from omini_sdk import ConfigBackup, PluginError, log, optional
 
 from omini_omada import vlans as vl
 from omini_omada import wifi as wlan
-from omini_omada.client import Client, Forbidden, NotFound, Unavailable
+from omini_omada.client import Client, Forbidden, HttpError, NotFound
+
+MISSING: Any = object()  # a site setting left out of the backup
 
 # The device list's fields that are settings (the rest is status).
 DEVICE_KEYS = ("mac", "name", "type", "model", "modelName")
@@ -107,7 +110,7 @@ def device_settings(c: Client, sid: str, row: dict[str, Any], m: str) -> dict[st
             # Left out the same way every time (role or version).
             log.info("%s settings left out of the backup: %s", kind, e)
             info = None
-        except Unavailable as e:
+        except HttpError as e:
             # Never a half-read backup: it would differ from the last one.
             raise PluginError(f"cannot read the settings of {m}: {e}") from e
         if isinstance(info, dict):
@@ -132,7 +135,7 @@ def site_settings(c: Client, sid: str) -> dict[str, Any]:
     application's role or the version cannot do, or the controller fails to
     answer, is left out."""
     out: dict[str, Any] = {}
-    reads = (
+    reads: tuple[tuple[str, Callable[[], Any]], ...] = (
         ("networks", lambda: ordered(vl.networks(c, sid), "name", "id")),
         ("port_profiles", lambda: ordered(vl.profiles(c, sid), "name", "id")),
         (
@@ -143,14 +146,12 @@ def site_settings(c: Client, sid: str) -> dict[str, Any]:
         ),
     )
     for name, read in reads:
-        try:
-            out[name] = clean(read(), SITE_LIVE)
-        except (Forbidden, NotFound) as e:
-            log.info("%s left out of the backup: %s", name, e)
-        except Unavailable as e:
-            # An optional part (as in the UniFi plugin): the devices' own
-            # settings are still backed up.
-            log.warning("%s left out of the backup: %s", name, e)
+        # An optional part (as in the UniFi plugin): one the role or version
+        # lacks, or the controller fails to answer, is left out (logged); the
+        # devices' own settings are still backed up.
+        value = optional(f"{name} (backup)", read, MISSING)
+        if value is not MISSING:
+            out[name] = clean(value, SITE_LIVE)
     return out
 
 

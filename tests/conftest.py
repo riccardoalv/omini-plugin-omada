@@ -118,7 +118,7 @@ class FakeOmada:
 
 @pytest.fixture
 def omada(monkeypatch):
-    monkeypatch.setattr(collect_module, "VERIFY_PAUSE_S", 0)
+    monkeypatch.setattr("time.sleep", lambda _s: None)  # no pauses while verifying
     fake = FakeOmada()
     monkeypatch.setattr(
         collect_module,
